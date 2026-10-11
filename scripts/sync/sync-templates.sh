@@ -107,16 +107,23 @@ for p in $changed $missing $defaults; do
   case "$p" in
     .github/workflows/*.yml)
       if [ -n "$runs_on" ] && grep -q 'RUNS_ON' "$p"; then
-        awk -v v="$runs_on" '{ gsub(/RUNS_ON/, v); print }' "$p" > "$p.tmp" && mv "$p.tmp" "$p"
+        fill_placeholder "$(cat "$p")" RUNS_ON "$runs_on" > "$p.tmp" && mv "$p.tmp" "$p"
         echo "  filled:   RUNS_ON in $p from ci.yml ($runs_on)"
       fi
       if [ -n "$run_shell" ] && grep -q 'RUN_SHELL' "$p"; then
-        awk -v v="$run_shell" '{ gsub(/RUN_SHELL/, v); print }' "$p" > "$p.tmp" && mv "$p.tmp" "$p"
+        fill_placeholder "$(cat "$p")" RUN_SHELL "$run_shell" > "$p.tmp" && mv "$p.tmp" "$p"
         echo "  filled:   RUN_SHELL in $p from ci.yml"
       fi
       needs=$(workflow_needs "$(cat "$p")")
       [ -n "$needs" ] && echo "  needs:    $p reads $needs; set them in the repository before its first run"
-      grep -q 'RUNS_ON\|RUN_SHELL' "$p" && echo "  todo:     $p still has a RUNS_ON or RUN_SHELL placeholder to fill" ;;
+      grep -q 'RUNS_ON\|RUN_SHELL' "$p" && echo "  todo:     $p still has a RUNS_ON or RUN_SHELL placeholder to fill"
+      # A workflow with a stray control byte fails every run with no jobs
+      # and nothing says why; refuse to commit one.
+      if [ "$(control_bytes "$(cat "$p")")" = yes ]; then
+        echo "  refused:  $p holds a control character after filling; not committing. Check the shell line in ci.yml." >&2
+        git checkout -q -- "$p" 2>/dev/null || rm -f "$p"
+        exit 1
+      fi ;;
   esac
   written="$written $p"
 done

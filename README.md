@@ -9,9 +9,9 @@
 A Claude Code plugin for projects where many coding agents work at once.</p>
 
 <p align="center">
-  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.7.8" src="https://img.shields.io/badge/version-0.7.8-110F17?labelColor=110F17&color=FFB347"></a>
+  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.7.9" src="https://img.shields.io/badge/version-0.7.9-110F17?labelColor=110F17&color=FFB347"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-110F17?labelColor=110F17&color=FF6EC7"></a>
-  <a href="#tests"><img alt="518 tests" src="https://img.shields.io/badge/tests-518%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
+  <a href="#tests"><img alt="524 tests" src="https://img.shields.io/badge/tests-524%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
   <a href="https://bitblitzin.com/bootstrap"><img alt="bitblitzin.com/bootstrap" src="https://img.shields.io/badge/site-bitblitzin.com%2Fbootstrap-110F17?labelColor=110F17&color=A8E36B"></a>
 </p>
 
@@ -406,7 +406,7 @@ ok    no overlap merges
 ok    overlap reruns
 ok    ci on main reruns
 
-518 passed, 0 failed
+524 passed, 0 failed
 ```
 
 ## License, privacy and terms
