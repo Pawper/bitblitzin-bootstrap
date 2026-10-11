@@ -40,13 +40,41 @@ batch_branch_name() {
   fi
 }
 
-# batch_pr_body CARRIED
-# CARRIED is one line per merged PR: "NUMBER<TAB>TITLE". Print the body of
-# the batch PR: one line per carried PR with its Closes line, so merging the
-# batch closes each PR's issue and the originals show as merged.
+# carried_refs BODY
+# The lines of a pull request body the batch must carry: each issue it
+# closes ("Closes #12", "Fixes #12", "Resolves #12", any case) and each spec
+# it names ("Spec: specs/004-dashboard"), one per line, in the order found.
+# A batch body without them failed spec-check on every src-only batch and
+# left every member's issue open after the merge.
+carried_refs() {
+  printf '%s\n' "$1" | tr -d '\r' | awk '
+    {
+      line = $0
+      while (match(tolower(line), /(close[sd]?|fix(e[sd])?|resolve[sd]?)[ \t]+#[0-9]+/)) {
+        m = substr(line, RSTART, RLENGTH); sub(/^[A-Za-z]+/, "", m); gsub(/[ \t]/, "", m)
+        out = "Closes " m; if (!(out in seen)) { seen[out] = 1; print out }
+        line = substr(line, RSTART + RLENGTH)
+      }
+      if (match($0, /[Ss]pec:[ \t]*[^ \t]+/)) {
+        m = substr($0, RSTART, RLENGTH); sub(/^[Ss]pec:[ \t]*/, "", m)
+        out = "Spec: " m; if (!(out in seen)) { seen[out] = 1; print out }
+      }
+    }'
+}
+
+# batch_pr_body CARRIED [REFS]
+# CARRIED is one line per merged PR: "NUMBER<TAB>TITLE". REFS is what
+# carried_refs gathered from every member's body. Print the body of the
+# batch PR: one line per carried PR, then every member's Closes and Spec
+# lines, so the batch passes spec-check whenever its members did and
+# merging it closes their issues as well as the pull requests.
 batch_pr_body() {
   printf 'One integration run for the pull requests below, merged in this order with merge commits. Each keeps its own history; the full suite runs once here.\n\n'
   printf '%s\n' "$1" | awk -F'\t' 'NF >= 1 && $1 != "" { printf "- #%s %s. Closes #%s\n", $1, $2, $1 }'
+  if [ -n "$(printf '%s' "$2" | tr -d ' \n\r\t')" ]; then
+    printf '\nCarried from the members:\n\n'
+    printf '%s\n' "$2" | awk 'NF && !seen[$0]++'
+  fi
 }
 
 # batch_line NUMBER OUTCOME [WHY]
@@ -75,8 +103,8 @@ drain_candidates() {
 # drain_waiting LIST BASE
 # How many non-draft pull requests aimed at BASE are still running CI.
 drain_waiting() {
-  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v base="$2" '
-    NF >= 5 && $2 == "false" && $5 == base && $4 == "pending" { n++ } END { print n + 0 }'
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v base="$2" -v tried=" $3 " '
+    NF >= 5 && $2 == "false" && $5 == base && ($4 == "pending" || ($4 == "cancelled" && index(tried, " " $1 " ") == 0)) { n++ } END { print n + 0 }'
 }
 
 # drain_retry LIST BASE RETRIED
@@ -85,7 +113,7 @@ drain_waiting() {
 # or a lost runner should not stop a change.
 drain_retry() {
   printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v base="$2" -v tried=" $3 " '
-    NF >= 5 && $2 == "false" && $5 == base && $4 == "red" && index(tried, " " $1 " ") == 0 { print $1 }' | sort -n
+    NF >= 5 && $2 == "false" && $5 == base && ($4 == "red" || $4 == "cancelled") && index(tried, " " $1 " ") == 0 { print $1 }' | sort -n
 }
 
 # drain_attention LIST BASE RETRIED
@@ -97,6 +125,7 @@ drain_attention() {
     NF >= 5 && $2 == "false" && $5 == base {
       if (toupper($3) == "CONFLICTING") printf "%s\thas conflicts with %s\n", $1, base
       else if ($4 == "red" && index(tried, " " $1 " ") > 0) printf "%s\tfailed CI twice\n", $1
+      else if ($4 == "cancelled" && index(tried, " " $1 " ") > 0) printf "%s\thad its CI cancelled twice\n", $1
     }' | sort -n
 }
 
@@ -105,14 +134,17 @@ drain_attention() {
 # (success, failure, neutral, cancelled, timed_out, action_required,
 # skipped, stale) or, while the run is not complete, its status (queued,
 # in_progress, waiting, pending). Print the one word the drain reads:
-# none, red, pending or green.
+# none, red, pending, cancelled or green. A cancelled job is not a red one:
+# a runner hiccup or a newer push cancels it, and the drain re-runs it
+# once rather than calling the change broken.
 rest_rollup() {
   printf '%s\n' "$1" | tr -d '\r' | tr 'A-Z' 'a-z' | awk '
     NF == 0 { next }
     { n++ }
-    /failure|timed_out|cancelled|action_required|startup_failure/ { red = 1 }
+    /failure|timed_out|action_required|startup_failure/ { red = 1 }
+    /cancelled/ { canc = 1 }
     /queued|in_progress|waiting|pending|requested/ { pend = 1 }
-    END { if (n == 0) print "none"; else if (red) print "red"; else if (pend) print "pending"; else print "green" }'
+    END { if (n == 0) print "none"; else if (red) print "red"; else if (pend) print "pending"; else if (canc) print "cancelled"; else print "green" }'
 }
 
 # mergeable_word STATE
