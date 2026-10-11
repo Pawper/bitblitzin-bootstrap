@@ -82,3 +82,30 @@ ci_runs_on() {
 ci_shell() {
   printf '%s\n' "$1" | tr -d '\r' | sed -n 's/^[ \t]*shell:[ \t]*//p' | sed 's/[ \t]*$//' | awk '$0 != "" && $0 != "RUN_SHELL" { print; exit }'
 }
+
+# fill_placeholder TEXT NAME VALUE
+# TEXT with every occurrence of NAME replaced by VALUE, literally: VALUE
+# goes in through the environment, never through awk -v or a format
+# string, which both turn "\b" into a backspace byte; and the replacement
+# is by position, never gsub, so "&" and backslashes in VALUE are kept.
+# A Windows shell path once lost its backslashes this way and GitHub
+# refused the workflow.
+fill_placeholder() {
+  FP_NAME=$2 FP_VALUE=$3 awk '
+    BEGIN { name = ENVIRON["FP_NAME"]; val = ENVIRON["FP_VALUE"]; n = length(name) }
+    {
+      line = $0; out = ""
+      while (n > 0 && (i = index(line, name)) > 0) { out = out substr(line, 1, i - 1) val; line = substr(line, i + n) }
+      print out line
+    }' <<FPEOF
+$1
+FPEOF
+}
+
+# control_bytes TEXT
+# Print "yes" when TEXT holds a control character other than tab or
+# newline, which no workflow file should; "no" otherwise. The sync checks
+# a workflow it wrote before committing it.
+control_bytes() {
+  if printf '%s' "$1" | LC_ALL=C tr -d '\011\012\015' | LC_ALL=C grep -q '[[:cntrl:]]'; then echo yes; else echo no; fi
+}

@@ -969,6 +969,14 @@ eq "the shell from a project workflow, quotes kept" "'C:\\PROGRA~1\\Git\\bin\\ba
   run:
     shell: 'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'")"
 eq "a RUN_SHELL placeholder is not a value" "" "$(ci_shell '    shell: RUN_SHELL')"
+eq "a Windows shell path is filled with its backslashes intact" "    shell: 'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'" "$(fill_placeholder '    shell: RUN_SHELL' RUN_SHELL "'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'")"
+eq "an ampersand in the value is literal" "runs-on: a & b" "$(fill_placeholder 'runs-on: RUNS_ON' RUNS_ON 'a & b')"
+eq "every occurrence on a line is filled" "x [self-hosted] y [self-hosted]" "$(fill_placeholder 'x RUNS_ON y RUNS_ON' RUNS_ON '[self-hosted]')"
+eq "lines without the name are untouched" "a
+b" "$(fill_placeholder 'a
+b' RUNS_ON z)"
+eq "a backspace byte is a control byte" "yes" "$(control_bytes "$(printf 'shell: C:\bin')")"
+eq "tabs and newlines are not" "no" "$(control_bytes "$(printf 'a\tb\nc')")"
 eq "a Windows checkout is the same text" "yes" "$(same_text "$(printf 'a\r\nb\r\n')" "$(printf 'a\nb')")"
 eq "a changed line is not" "no" "$(same_text 'a
 b' 'a
