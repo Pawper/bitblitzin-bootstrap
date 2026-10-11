@@ -55,6 +55,11 @@ out="Session brief. Reply from this first. For where each issue and pull request
 add() { out="$out$1
 "; }
 
+# The plugin's real path. $CLAUDE_PLUGIN_ROOT is set for hooks but empty in
+# an agent's Bash tool, so a command written with it fails as typed; every
+# plugin command an agent runs uses this path instead.
+add "Plugin: $(cd "$here/../.." && pwd). In the Bash tool \$CLAUDE_PLUGIN_ROOT is empty; use this path for the plugin's scripts."
+
 # Today, in the owner's local time. The hook runs on the owner's machine,
 # so a plain date is local; gh output and runner logs are UTC, and an
 # agent that dates things from them writes tomorrow's date all evening.
@@ -193,7 +198,7 @@ if has leftover && [ -f "$here/../../templates/OWNED.txt" ] && [ -f "$here/../..
     elif [ "$(same_text "$(cat "$p")" "$(cat "$here/../../templates/$p")")" = no ]; then t_old=$((t_old + 1)); fi
   done
   if [ $((t_old + t_missing)) -gt 0 ]; then
-    add "Templates: $t_old of the plugin's scripts here differ from the installed plugin and $t_missing are missing. See which with: sh \"\$CLAUDE_PLUGIN_ROOT/scripts/sync/sync-templates.sh\""
+    add "Templates: $t_old of the plugin's scripts here differ from the installed plugin and $t_missing are missing, counting features this project does not use. See which with: sh \"$(cd "$here/../.." && pwd)/scripts/sync/sync-templates.sh\""
   fi
 fi
 

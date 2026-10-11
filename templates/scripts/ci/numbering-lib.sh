@@ -145,3 +145,23 @@ duplicate_ids() {
 next_free_id() {
   printf '%s\n' "$1" | awk -v pre="$2" '/^[0-9]+$/ { if ($0 + 0 > max) max = $0 + 0 } END { print pre (max + 1) }'
 }
+
+# migration_glob_guess FILES
+# FILES is one tracked path per line. Print the migration glob the files
+# fit, the first of supabase/migrations/*.sql, migrations/*.sql,
+# db/migrations/*.sql, database/migrations/*.sql with a file in it, or
+# nothing. A Supabase project shipped with "migrations/*.sql", next-number
+# answered 0001 to every agent all day, and the gate refused a real one.
+migration_glob_guess() {
+  printf '%s\n' "$1" | tr -d '\r' | tr '\\' '/' | awk '
+    /^supabase\/migrations\/[^\/]+\.sql$/ { s = 1 }
+    /^migrations\/[^\/]+\.sql$/ { m = 1 }
+    /^db\/migrations\/[^\/]+\.sql$/ { d = 1 }
+    /^database\/migrations\/[^\/]+\.sql$/ { b = 1 }
+    END {
+      if (s) print "supabase/migrations/*.sql"
+      else if (m) print "migrations/*.sql"
+      else if (d) print "db/migrations/*.sql"
+      else if (b) print "database/migrations/*.sql"
+    }'
+}

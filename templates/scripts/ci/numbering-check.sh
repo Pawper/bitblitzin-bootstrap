@@ -22,13 +22,23 @@ if [ -f .claude/numbering.txt ]; then
     kind=${line%% *}; glob=$(numbering_glob "$line" "$kind"); prefix=$(numbering_prefix "$line" "$kind")
     if [ -n "$prefix" ]; then
       dups=$(duplicate_ids "$(git show "$head:$glob" 2>/dev/null)" "$prefix")
-      if [ -n "$dups" ]; then
-        echo "$glob defines $(printf '%s' "$dups" | tr '\n' ' ')twice; two pull requests took the same $kind number. Renumber the newer one with: sh scripts/next-number.sh $kind" >&2
+      old=$(duplicate_ids "$(git show "$base:$glob" 2>/dev/null)" "$prefix")
+      new=$(printf '%s\n' "$dups" | while IFS= read -r d; do [ -n "$d" ] && ! printf '%s\n' "$old" | grep -qx "$d" && echo "$d"; done)
+      if [ -n "$old" ]; then
+        echo "Cleanup, not this change's fault: $glob already defines $(printf '%s' "$old" | tr '\n' ' ' | sed 's/ $//') twice on $base. Remove the stale row once, in its own pull request." >&2
+      fi
+      if [ -n "$new" ]; then
+        echo "$glob defines $(printf '%s' "$new" | tr '\n' ' ' | sed 's/ $//') twice; two pull requests took the same $kind number. Renumber the newer one with: sh scripts/next-number.sh $kind" >&2
         echo fail
       fi
       continue
     fi
     dups=$(duplicate_numbers "$files" "$glob")
+    old=$(duplicate_numbers "$(git ls-tree -r --name-only "$base" 2>/dev/null)" "$glob" | cut -f1)
+    if [ -n "$old" ]; then
+      echo "Cleanup, not this change's fault: two $kind files already share $(printf '%s' "$old" | tr '\n' ' ' | sed 's/ $//') on $base. Renumber one in its own pull request." >&2
+      dups=$(printf '%s\n' "$dups" | awk -F'\t' -v old=" $(printf '%s' "$old" | tr '\n' ' ') " 'NF && index(old, " " $1 " ") == 0')
+    fi
     if [ -n "$dups" ]; then
       printf '%s\n' "$dups" | while IFS="$(printf '\t')" read -r num names; do
         echo "Two $kind files share the number $num: $names. Renumber the newer one with: sh scripts/next-number.sh $kind" >&2

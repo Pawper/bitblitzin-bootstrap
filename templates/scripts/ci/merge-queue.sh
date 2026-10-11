@@ -27,6 +27,16 @@
 # branch protection; this script is the queue. See scripts/ci/QUEUE.md.
 set -e
 here=$(dirname "$0")
+# Run from a copy. sh reads a script as it goes, so an agent switching the
+# checkout to another branch mid-drain could change the queue under itself.
+# The copy holds scripts/ci and the worktree scripts it calls.
+if [ -z "$QUEUE_FROM_COPY" ]; then
+  qc=$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/queue-$$")
+  mkdir -p "$qc/ci" && cp "$here"/* "$qc/ci/" 2>/dev/null
+  for f in worktrees.sh worktrees-lib.sh; do [ -f "$here/../$f" ] && cp "$here/../$f" "$qc/"; done
+  QUEUE_FROM_COPY=1; export QUEUE_FROM_COPY
+  exec sh "$qc/ci/merge-queue.sh" "$@"
+fi
 . "$here/lib.sh"
 . "$here/batch-lib.sh"
 rules=$(cat "$here/classes.txt")

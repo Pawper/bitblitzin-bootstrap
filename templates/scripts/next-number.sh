@@ -53,5 +53,14 @@ command -v gh >/dev/null 2>&1 && in_prs=$(gh pr list --state open --limit 100 --
 here_now=$(git ls-files --others --cached 2>/dev/null || true)
 
 all=$(printf '%s\n%s\n%s\n' "$on_main" "$in_prs" "$here_now")
-next=$(next_free_number "$(numbers_in "$all" "$glob")")
+found=$(numbers_in "$all" "$glob")
+if [ -z "$(printf '%s' "$found" | tr -d ' \n')" ]; then
+  guess=$(migration_glob_guess "$all")
+  if [ -n "$guess" ] && [ "$guess" != "$glob" ]; then
+    echo "No file matches \"$glob\" from .claude/numbering.txt, but $guess does. Fix the $kind line there to: $kind $guess" >&2
+    exit 2
+  fi
+  echo "No file matches \"$glob\" yet; this is the first $kind." >&2
+fi
+next=$(next_free_number "$found")
 echo "$next"

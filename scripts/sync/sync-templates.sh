@@ -29,22 +29,53 @@ here=$(dirname "$0")
 . "$here/sync-lib.sh"
 plugin=$(cd "$here/../.." && pwd)
 tpl="$plugin/templates"
-apply=no; force=no
-for a in "$@"; do
-  case "$a" in --apply) apply=yes ;; --force) force=yes ;; esac
+apply=no; force=no; only=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --apply) apply=yes ;;
+    --force) force=yes ;;
+    --only) shift; only=$(printf '%s' "$1" | tr ',' ' ') ;;
+    --only=*) only=$(printf '%s' "${1#--only=}" | tr ',' ' ') ;;
+  esac
+  shift
 done
+# The command for this plugin, by its real path: $CLAUDE_PLUGIN_ROOT is set
+# for hooks but empty in an agent's Bash tool, so a command printed with it
+# fails as typed.
+self="sh \"$plugin/scripts/sync/sync-templates.sh\""
 
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "Run this from the project's root, inside its git repository." >&2; exit 2; }
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$plugin/.claude-plugin/plugin.json" | head -n 1)
 owned=$(cat "$tpl/OWNED.txt")
 
-changed=""; missing=""; current=0
+# Features: refresh and complete the ones this project uses; report, never
+# add, the ones it has none of, since it may have its own tools for them.
+# --only names the features to touch, adopted or not.
+features=$(owned_features "$owned")
+present=""; for p in $(owned_paths "$owned"); do [ -f "$p" ] && present="$present$p
+"; done
+adopted=$(adopted_features "$features" "$present")
+# A file the project already has is always refreshed (within --only); a
+# missing one is added only for a feature in use or named with --only.
+in_scope() {
+  is_f=$(feature_of "$features" "$1")
+  if [ -n "$only" ]; then case " $only " in *" $is_f "*) return 0 ;; *) return 1 ;; esac; fi
+  [ -f "$1" ] && return 0
+  case " $adopted " in *" $is_f "*) return 0 ;; *) return 1 ;; esac
+}
+changed=""; missing=""; current=0; unadopted=""
 for p in $(owned_paths "$owned"); do
+  if ! in_scope "$p"; then
+    [ -f "$p" ] || unadopted="$unadopted $(feature_of "$features" "$p")"
+    continue
+  fi
   if [ ! -f "$p" ]; then missing="$missing $p"; continue; fi
   if [ "$(same_text "$(cat "$p")" "$(cat "$tpl/$p")")" = yes ]; then current=$((current + 1)); else changed="$changed $p"; fi
 done
 defaults=""
-for p in $(default_paths "$owned"); do [ -f "$p" ] || defaults="$defaults $p"; done
+# The config defaults belong to the core checks; a project that does not
+# use them does not need their config.
+case " $adopted " in *" core "*) [ -n "$only" ] || for p in $(default_paths "$owned"); do [ -f "$p" ] || defaults="$defaults $p"; done ;; esac
 
 echo "Plugin $version. Plugin-owned files here: $current current, $(printf '%s' "$changed" | wc -w | tr -d ' ') older or edited, $(printf '%s' "$missing" | wc -w | tr -d ' ') missing."
 edited=""
@@ -59,18 +90,43 @@ for p in $changed; do
   else echo "  differs:  $p"; fi
 done
 for p in $missing; do echo "  missing:  $p"; done
+if [ -n "$unadopted" ] && [ -z "$only" ]; then
+  for f in $(printf '%s\n' $unadopted | awk '!seen[$0]++'); do
+    n=$(printf '%s\n' "$features" | awk -F'\t' -v f="$f" '$1 == f' | wc -l | tr -d ' ')
+    anchor=$(printf '%s\n' "$features" | awk -F'\t' -v f="$f" '$1 == f { print $2; exit }')
+    echo "  not used: the $f feature ($n files; its main file $anchor is not here). The project may have its own tools for it, so its missing files are not added. To add it: $self --apply --only $f"
+  done
+fi
+[ -z "$only" ] || echo "Only the $only feature(s)."
 for p in $defaults; do echo "  new config, would be added with its defaults: $p"; done
 
-# The project's own files: report what the template gained.
-if [ -f .github/workflows/ci.yml ]; then
+# The project's own files: report what the template gained (not with
+# --only, which is about one feature).
+if [ -z "$only" ] && [ -f .github/workflows/ci.yml ]; then
   jobs=$(missing_jobs "$(cat "$tpl/.github/workflows/ci.yml")" "$(cat .github/workflows/ci.yml)")
   [ -n "$jobs" ] && echo "  ci.yml is yours; the template has jobs it lacks: $(printf '%s' "$jobs" | tr '\n' ' ')(copy them from $tpl/.github/workflows/ci.yml and add each to CI passed)"
 fi
 for f in .gitattributes .gitignore; do
-  [ -f "$f" ] || continue
+  [ -z "$only" ] && [ -f "$f" ] || continue
   lines=$(missing_lines "$(cat "$tpl/$f")" "$(cat "$f")")
   [ -n "$lines" ] && echo "  $f is yours; the template has lines it lacks: $(printf '%s' "$lines" | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
 done
+
+# Numbering: a migration glob that matches no file, while a common folder
+# holds migrations, makes next-number answer 0001 and the gate refuse real
+# ones. Say which line to write.
+if [ -f .claude/numbering.txt ] && [ -f "$tpl/scripts/ci/numbering-lib.sh" ]; then
+  . "$tpl/scripts/ci/numbering-lib.sh"
+  mg=$(numbering_glob "$(cat .claude/numbering.txt)" migration)
+  if [ -n "$mg" ]; then
+    tracked=$(git ls-files 2>/dev/null)
+    set -f; hit=$(printf '%s\n' "$tracked" | while IFS= read -r f; do case "$f" in $mg) echo y; break ;; esac; done); set +f
+    guess=$(migration_glob_guess "$tracked")
+    if [ -z "$hit" ] && [ -n "$guess" ] && [ "$guess" != "$mg" ]; then
+      echo "  numbering: .claude/numbering.txt says migrations are \"$mg\", which matches no file; they are in \"$guess\". Change the line to: migration $guess"
+    fi
+  fi
+fi
 
 # Deploys: a project that deploys to Vercel with no guard builds every
 # branch; one with a hand-written guard may diff HEAD^..HEAD, which drops
@@ -84,15 +140,15 @@ if [ -f "$tpl/scripts/ci/deploy-lib.sh" ]; then
     kind=none; [ -n "$vj" ] && kind=$(guard_kind "$(cat "$vj")")
     app=.; [ -n "$vj" ] && app=$(dirname "$vj")
     case "$kind" in
-      handwritten) echo "  deploys:  $vj has a hand-written guard$(grep -q 'HEAD^' "$vj" && printf ' that diffs HEAD^..HEAD: when a push ends in a docs-only commit, the app changes before it are skipped and never deploy'); replace it: sh scripts/deploy-setup.sh \"\" $app" ;;
-      none) echo "  deploys:  this project deploys to Vercel with nothing keeping build CPU down; every branch builds. Run: sh scripts/deploy-setup.sh \"\" $app" ;;
+      handwritten) echo "  deploys:  $vj has a hand-written guard$(grep -q 'HEAD^' "$vj" && printf ' that diffs HEAD^..HEAD: when a push ends in a docs-only commit, the app changes before it are skipped and never deploy'); replace it with the plugin's guard, the same kind of setup done right: $self --apply --only deploy, then sh scripts/deploy-setup.sh guard $app. Whether it is already merged makes no difference; the setup rewrites vercel.json either way" ;;
+      none) echo "  deploys:  this project deploys to Vercel with nothing keeping build CPU down; every branch builds. Run: $self --apply --only deploy, then sh scripts/deploy-setup.sh \"\" $app" ;;
     esac
   fi
 fi
 
 work=$(printf '%s%s%s' "$changed" "$missing" "$defaults" | tr -d ' ')
 if [ -z "$work" ]; then echo "Everything the plugin owns is current."; exit 0; fi
-if [ "$apply" = no ]; then echo "Nothing was changed. Add --apply to write these on a new branch."; exit 0; fi
+if [ "$apply" = no ]; then echo "Nothing was changed. To write these on a branch: $self --apply${only:+ --only $(printf '%s' "$only" | tr ' ' ',')}"; exit 0; fi
 
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "The working tree has uncommitted changes; commit or move them aside first." >&2; exit 1; }
 # On a branch made for the sync (anything but the default branch), commit
@@ -122,6 +178,14 @@ for p in $changed $missing $defaults; do
   mkdir -p "$(dirname "$p")"
   cp "$tpl/$p" "$p"
   case "$p" in *.sh) chmod +x "$p" 2>/dev/null || true ;; esac
+  if [ "$p" = .claude/numbering.txt ]; then
+    . "$tpl/scripts/ci/numbering-lib.sh"
+    g=$(migration_glob_guess "$(git ls-files 2>/dev/null)")
+    if [ -n "$g" ]; then
+      awk -v g="$g" '/^migration[ \t]/ && !done { print "migration " g; done = 1; next } { print }' "$p" > "$p.tmp" && mv "$p.tmp" "$p"
+      echo "  numbering: migrations are in $g here; .claude/numbering.txt says so"
+    fi
+  fi
   case "$p" in
     .github/workflows/*.yml)
       if [ -n "$runs_on" ] && grep -q 'RUNS_ON' "$p"; then
@@ -146,6 +210,23 @@ for p in $changed $missing $defaults; do
   written="$written $p"
 done
 [ -n "$(printf '%s' "$written" | tr -d ' ')" ] || { echo "Nothing written: every differing file was edited here. Pass --force to replace them."; git checkout -q -; exit 0; }
+# Scripts must stay LF: a repository that checks out CRLF breaks every
+# shell script it copies. Pin the types the sync writes, once.
+lf_add=""
+for ext in sh mjs; do
+  for p in $written; do
+    case "$p" in *."$ext")
+      case "$(git check-attr eol -- "$p" 2>/dev/null)" in *": eol: lf") ;; *) lf_add="$lf_add *.$ext" ;; esac
+      break ;;
+    esac
+  done
+done
+if [ -n "$lf_add" ]; then
+  for pat in $lf_add; do printf '%s text eol=lf\n' "$pat" >> .gitattributes; done
+  git add .gitattributes
+  for p in $written; do git add --renormalize -- "$p" 2>/dev/null || true; done
+  echo "  pinned:   $lf_add to LF in .gitattributes, since this repository checks out CRLF"
+fi
 git add -- $written
 git commit -q -m "Sync the plugin's scripts and workflows to bitblitzin-bootstrap $version" -m "Plugin-owned files were brought up to date with the installed plugin; config files that did not exist were added with their defaults. Files the project owns, and plugin-owned files the project had edited, were not touched."
 echo "Committed on branch $branch. Review the diff, then push it and open a pull request. Secrets and variables named above must exist before the added workflows run."

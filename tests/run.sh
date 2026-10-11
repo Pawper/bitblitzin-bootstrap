@@ -837,6 +837,8 @@ Closes #64
 Spec: specs/004-dashboard" "$(batch_pr_body "$(printf '79\tAn emote\n')" 'Closes #64
 Spec: specs/004-dashboard
 Closes #64' | tail -n 4)"
+eq "the Deploy workflow has no placeholder for the sync to fill" "0" "$(grep -cw 'RUNS_ON\|RUN_SHELL' "$root/templates/.github/workflows/deploy.yml")"
+eq "the Deploy workflow does not need jq" "0" "$(grep -c 'jq -r\| jq ' "$root/templates/.github/workflows/deploy.yml")"
 eq "the queue never reads FETCH_HEAD" "0" "$(grep -c 'rev-parse FETCH_HEAD' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "dirty is conflicting" "CONFLICTING" "$(mergeable_word dirty)"
 eq "clean is mergeable" "MERGEABLE" "$(mergeable_word clean)"
@@ -885,6 +887,13 @@ eq "the glob for a kind" "supabase/migrations/*.sql" "$(numbering_glob '# note
 migration supabase/migrations/*.sql
 seed seed/*.json' migration)"
 eq "an unknown kind" "" "$(numbering_glob 'migration m/*.sql' setup)"
+eq "migrations in supabase/migrations are found" "supabase/migrations/*.sql" "$(migration_glob_guess 'web/src/a.ts
+supabase/migrations/0040_x.sql
+supabase/config.toml')"
+eq "root migrations are found" "migrations/*.sql" "$(migration_glob_guess 'migrations/0001_init.sql')"
+eq "supabase wins when both exist" "supabase/migrations/*.sql" "$(migration_glob_guess 'migrations/0001.sql
+supabase/migrations/0002.sql')"
+eq "no migrations, no guess" "" "$(migration_glob_guess 'src/a.ts')"
 paths='supabase/migrations/0021_chime_volume.sql
 supabase/migrations/0022_station_chime_volume.sql
 supabase/migrations/README.md
@@ -988,11 +997,34 @@ eq "runs-on from a project workflow" "[self-hosted, windows]" "$(ci_runs_on 'job
   b:
     runs-on: ubuntu-latest')"
 eq "a RUNS_ON placeholder is not a value" "" "$(ci_runs_on '    runs-on: RUNS_ON')"
+eq "an expression is never copied as a runner" "[self-hosted, windows]" "$(ci_runs_on '    runs-on: ${{ fromJSON(needs.plan.outputs.runner) }}
+    runs-on: [self-hosted, windows]')"
+owned_txt='feature core
+scripts/ci/lib.sh
+feature board
+scripts/state.sh
+scripts/board.sh
+feature deploy
+scripts/deploy-setup.sh
+default scripts/ci/classes.txt'
+feats=$(owned_features "$owned_txt")
+eq "owned paths skip feature lines" "scripts/ci/lib.sh
+scripts/state.sh
+scripts/board.sh
+scripts/deploy-setup.sh" "$(owned_paths "$owned_txt")"
+eq "a path's feature" "board" "$(feature_of "$feats" scripts/board.sh)"
+eq "a feature is not used for one stray file, only its anchor" "core" "$(adopted_features "$feats" 'scripts/ci/lib.sh
+scripts/board.sh')"
+eq "features a project uses: their anchors are here" "core deploy" "$(adopted_features "$feats" 'scripts/ci/lib.sh
+scripts/deploy-setup.sh')"
+eq "a project with its own board tools has none of the plugin's: not used" "core" "$(adopted_features "$feats" 'scripts/ci/lib.sh
+scripts/board-state.sh')"
 eq "the shell from a project workflow, quotes kept" "'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'" "$(ci_shell "defaults:
   run:
     shell: 'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'")"
 eq "a RUN_SHELL placeholder is not a value" "" "$(ci_shell '    shell: RUN_SHELL')"
 eq "a Windows shell path is filled with its backslashes intact" "    shell: 'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'" "$(fill_placeholder '    shell: RUN_SHELL' RUN_SHELL "'C:\\PROGRA~1\\Git\\bin\\bash.exe -eo pipefail {0}'")"
+eq "a placeholder inside a longer name is left alone" "vars.DEPLOY_RUNS_ON and [self-hosted]" "$(fill_placeholder 'vars.DEPLOY_RUNS_ON and RUNS_ON' RUNS_ON '[self-hosted]')"
 eq "an ampersand in the value is literal" "runs-on: a & b" "$(fill_placeholder 'runs-on: RUNS_ON' RUNS_ON 'a & b')"
 eq "every occurrence on a line is filled" "x [self-hosted] y [self-hosted]" "$(fill_placeholder 'x RUNS_ON y RUNS_ON' RUNS_ON '[self-hosted]')"
 eq "lines without the name are untouched" "a
@@ -1069,6 +1101,27 @@ eq "runner and secrets: the runner path" "runner" "$(deploy_path yes yes yes)"
 eq "secrets but no runner: a Vercel build on a schedule" "vercel" "$(deploy_path yes no yes)"
 eq "no secrets: the guard" "guard" "$(deploy_path yes yes no)"
 eq "not on Vercel: none" "none" "$(deploy_path no yes yes)"
+eq "only Windows runners, hosted minutes: a Vercel build on a schedule" "vercel" "$(deploy_path yes no yes yes)"
+eq "only Windows runners, no hosted minutes: the guard, which needs no workflow" "guard" "$(deploy_path yes no yes no)"
+eq "a Linux runner and no hosted minutes: the runner path" "runner" "$(deploy_path yes yes yes no)"
+eq "the first runner that is not Windows" '["self-hosted","Linux"]' "$(runner_os_pick "$(printf 'Windows\tself-hosted,Windows\nLinux\tself-hosted,Linux')")"
+eq "macOS counts" '["self-hosted","macOS"]' "$(runner_os_pick "$(printf 'macOS\tself-hosted')")"
+eq "only Windows runners, no pick" "" "$(runner_os_pick "$(printf 'Windows\ta\nWindows\tb')")"
+eq "no runners, no pick" "" "$(runner_os_pick '')"
+eq "a project's own never-ships folder" "no" "$(ships_path 'packs/level-1.json' . 'packs scripts')"
+eq "its nested files too" "no" "$(ships_path 'scripts/gen/x.mjs' . 'packs scripts/')"
+eq "a folder that only starts the same still ships" "yes" "$(ships_path 'packsize/a.ts' . 'packs')"
+eq "the extra folders apply inside the app's folder" "no" "$(ships_path 'web/packs/a.json' web 'packs')"
+eq "the skip decision passes them on" "skip" "$(deploy_skip 'packs/a.json
+docs/b.md' . 'packs')"
+eq "a JSON array's words" "packs scripts" "$(json_words '{"path": "guard", "neverShips": ["packs", "scripts"]}' neverShips)"
+eq "an empty array" "" "$(json_words '{"neverShips": []}' neverShips)"
+eq "a missing key" "" "$(json_words '{"path": "guard"}' neverShips)"
+eq "a string" "web" "$(json_string '{"path": "runner", "appRoot": "web"}' appRoot)"
+eq "a number" "90" "$(json_number '{"intervalMinutes": 90}' intervalMinutes)"
+eq "a zero interval still waits half an hour before calling main behind" "" "$(deploy_health guard abc def 1000 3000 0 '')"
+eq "a fallback to a Vercel build is said, even with main deployed" "Deploys: the last deploy fell back to a build on Vercel because the runner build failed, so it billed Vercel build minutes. Open the Deploy workflow's last run, job build-on-runner." "$(deploy_health runner abc abc '' 9000 60 fellback)"
+eq "and then says so" "Deploys: main has changes waiting 65 minutes that are not in production (the interval is 0); check the Deploy workflow and the runner." "$(deploy_health guard abc def 1000 4900 0 '')"
 eq "hourly" "17 * * * *" "$(interval_cron 60)"
 eq "every three hours" "17 */3 * * *" "$(interval_cron 180)"
 eq "every thirty minutes" "*/30 * * * *" "$(interval_cron 30)"
@@ -1104,22 +1157,22 @@ dt=$(mktemp -d)
   now=$(git rev-parse HEAD)
   VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "same:$?"
   echo c > src/a.ts && git commit -qam app2
-  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "throttled:$?"
-  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now DEPLOY_INTERVAL_MINUTES=0 sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "no-throttle:$?"
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now DEPLOY_INTERVAL_MINUTES=60 sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "throttled:$?"
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "no-throttle:$?"
 ) 2>/dev/null | grep -E "^[a-z-]+:[0-9]$" > "$dt.out"
 eq "the ignore step skips docs-only since the last deploy" "docs:0" "$(sed -n 1p "$dt.out")"
 eq "the ignore step builds an app change since the last deploy, not only the last commit" "app:1" "$(sed -n 2p "$dt.out")"
 eq "the ignore step skips any branch but main" "branch:0" "$(sed -n 3p "$dt.out")"
 eq "the ignore step skips when nothing changed" "same:0" "$(sed -n 4p "$dt.out")"
-eq "the ignore step throttles a deploy under an hour after the last" "throttled:0" "$(sed -n 5p "$dt.out")"
-eq "with no interval it builds" "no-throttle:1" "$(sed -n 6p "$dt.out")"
+eq "with DEPLOY_INTERVAL_MINUTES=60 the ignore step throttles a deploy under an hour after the last" "throttled:0" "$(sed -n 5p "$dt.out")"
+eq "by default there is no throttle, so the day's last merge ships" "no-throttle:1" "$(sed -n 6p "$dt.out")"
 if command -v node >/dev/null 2>&1; then
   (
     cd "$dt" && mkdir -p .github/workflows && cp "$root/templates/.github/workflows/deploy.yml" .github/workflows/ && mkdir -p scripts && cp "$root/templates/scripts/deploy-setup.sh" scripts/
     printf '{\n  "crons": [{"path": "/api/cron/cleanup", "schedule": "17 10 * * *"}]\n}\n' > web/vercel.json
     PATH_SAVE=$PATH; sh scripts/deploy-setup.sh guard web 90 >/dev/null 2>&1; echo "guard:$?"
     node -e 'const j=require("./web/vercel.json"); console.log(JSON.stringify([j.crons.length, j.git.deploymentEnabled.main, j.git.deploymentEnabled["*"], j.ignoreCommand]))'
-    sh scripts/deploy-setup.sh runner web 180 >/dev/null 2>&1; echo "runner:$?"
+    DEPLOY_NEVER_SHIPS="packs scripts" DEPLOY_HOSTED=yes sh scripts/deploy-setup.sh runner web 180 >/dev/null 2>&1; echo "runner:$?"
     node -e 'const j=require("./web/vercel.json"); console.log(JSON.stringify([j.crons.length, j.git.deploymentEnabled, j.ignoreCommand === undefined]))'
     grep -o 'cron: "[^"]*"' .github/workflows/deploy.yml
     tr -d ' \n' < .claude/deploy.json | sed 's/"_comment":"[^"]*",//'; echo
@@ -1128,8 +1181,8 @@ if command -v node >/dev/null 2>&1; then
 [1,true,false,\"sh ../scripts/ci/vercel-ignore.sh\"]" "$(sed -n 1,2p "$dt.setup")"
   eq "the setup turns Git deploys off for the runner path and drops the ignore step" "runner:0
 [1,false,true]" "$(sed -n 3,4p "$dt.setup")"
-  eq "the setup writes the schedule from the interval" 'cron: "17 */3 * * *"' "$(sed -n 5p "$dt.setup")"
-  eq "the setup records the path, the folder and the interval" '{"path":"runner","appRoot":"web","intervalMinutes":180}' "$(sed -n 6p "$dt.setup")"
+  eq "the setup never edits the Deploy workflow" 'cron: "17 * * * *"' "$(sed -n 5p "$dt.setup")"
+  eq "the setup records the path, the folder, the interval and the never-ships folders" '{"path":"runner","appRoot":"web","intervalMinutes":180,"neverShips":["packs","scripts"]}' "$(sed -n 6p "$dt.setup")"
 fi
 mv "$dt" "$dt.done" 2>/dev/null || true
 

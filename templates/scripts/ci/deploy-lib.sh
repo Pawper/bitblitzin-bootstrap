@@ -10,17 +10,21 @@
 # (runner); a scheduled deploy that Vercel builds (vercel); Git deploys from
 # main only, guarded and throttled (guard).
 
-# ships_path PATH APP_ROOT
+# ships_path PATH APP_ROOT [EXTRA]
 # Print "yes" when a change to PATH (relative to the repository root) can
 # change what the app ships, "no" when it cannot. APP_ROOT is the app's
 # folder ("." for the root). Outside APP_ROOT nothing ships. Inside it, the
 # homes the plugin knows never ship: docs, specs, tests, status, design,
 # logs, supabase, .github, .claude, .scratch, Markdown, and test files.
+# EXTRA is the project's own, space separated folders inside the app
+# ("packs scripts"), from "neverShips" in .claude/deploy.json.
 ships_path() {
-  printf '%s\n' "$1" | tr '\\' '/' | awk -v root="$2" '
+  printf '%s\n' "$1" | tr '\\' '/' | awk -v root="$2" -v extra="$3" '
     {
       p = $0; r = root; sub(/\/$/, "", r)
       if (r != "" && r != ".") { if (substr(p, 1, length(r) + 1) != r "/") { print "no"; exit } p = substr(p, length(r) + 2) }
+      n = split(extra, x, /[ \t,]+/)
+      for (i = 1; i <= n; i++) { e = x[i]; sub(/^\.\//, "", e); sub(/\/$/, "", e); if (e != "" && (p == e || substr(p, 1, length(e) + 1) == e "/")) { print "no"; exit } }
       if (p ~ /^(docs|specs|tests?|status|design|logs|supabase|e2e|\.github|\.claude|\.scratch)\//) { print "no"; exit }
       if (p ~ /\/(tests?|__tests__|e2e)\//) { print "no"; exit }
       if (p ~ /\.(md|mdx)$/ || p ~ /(^|\/)[^\/]*\.(test|spec)\.[A-Za-z]+$/) { print "no"; exit }
@@ -28,16 +32,16 @@ ships_path() {
     }'
 }
 
-# deploy_skip PATHS APP_ROOT
+# deploy_skip PATHS APP_ROOT [EXTRA]
 # PATHS is one changed path per line since the last deployed commit. Print
 # "skip" when none of them ships, "build" when one does. No paths at all is
-# "skip": nothing changed.
+# "skip": nothing changed. EXTRA as for ships_path.
 deploy_skip() {
   ds_any=no
   ds_list=$(printf '%s\n' "$1" | tr -d '\r')
   while IFS= read -r ds_p; do
     [ -n "$ds_p" ] || continue
-    if [ "$(ships_path "$ds_p" "$2")" = yes ]; then ds_any=yes; break; fi
+    if [ "$(ships_path "$ds_p" "$2" "$3")" = yes ]; then ds_any=yes; break; fi
   done <<EOF
 $ds_list
 EOF
@@ -55,17 +59,52 @@ deploy_throttle() {
   if [ "$dt_left" -le 0 ]; then echo build; else echo "wait $(( (dt_left + 59) / 60 ))"; fi
 }
 
-# deploy_path VERCEL RUNNER SECRETS
+# deploy_path VERCEL RUNNER SECRETS [HOSTED]
 # Each argument is yes or no: the project deploys to Vercel; it has a
-# self-hosted runner; the Vercel token, org and project ids are set as
-# repository secrets. Print the path to set up: runner, vercel, guard, or
-# none when the project does not deploy to Vercel. The scheduled paths need
-# the secrets; without them only the guard works.
+# self-hosted runner that is not Windows; the Vercel token, org and project
+# ids are set as repository secrets; GitHub's hosted machines are available
+# (a private repository may have no hosted minutes; default yes). Print the
+# path to set up: runner, vercel, guard, or none when the project does not
+# deploy to Vercel.
+#
+# A Windows runner never takes the runner path: its build cannot write the
+# output without Developer Mode, and with it Vercel rejects the upload at
+# "Deploying outputs". The scheduled vercel path needs somewhere to run the
+# deploy: a hosted machine or a non-Windows runner. Without the secrets, or
+# with nowhere to run, only the guard works, and it needs no workflow.
 deploy_path() {
   [ "$1" = yes ] || { echo none; return 0; }
   if [ "$3" = yes ] && [ "$2" = yes ]; then echo runner
-  elif [ "$3" = yes ]; then echo vercel
+  elif [ "$3" = yes ] && [ "${4:-yes}" = yes ]; then echo vercel
   else echo guard; fi
+}
+
+# runner_os_pick RUNNERS
+# RUNNERS is one self-hosted runner per line, "os<TAB>labels" as GitHub
+# lists them ("Linux<TAB>self-hosted,Linux,X64"). Print the runs-on value
+# for the first runner that is not Windows, as a JSON array
+# (["self-hosted","Linux"]), or nothing when every runner is Windows.
+runner_os_pick() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' '
+    NF >= 1 && $1 != "" && tolower($1) !~ /windows/ { printf "[\"self-hosted\",\"%s\"]\n", $1; exit }'
+}
+
+# json_words TEXT KEY
+# The strings of a one-line JSON array under KEY, space separated:
+# "neverShips": ["packs", "scripts"] gives "packs scripts". Nothing when
+# the key is missing.
+json_words() {
+  printf '%s' "$1" | tr -d '\r\n' | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\\[\\([^]]*\\)\\].*/\\1/p" | tr -d '"' | tr ',' ' ' | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+
+# json_string TEXT KEY / json_number TEXT KEY
+# A top-level string or number from a small JSON file such as
+# .claude/deploy.json, without jq, which a self-hosted machine may lack.
+json_string() {
+  printf '%s' "$1" | tr -d '\r\n' | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p"
+}
+json_number() {
+  printf '%s' "$1" | tr -d '\r\n' | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p"
 }
 
 # interval_cron MINUTES
@@ -110,7 +149,10 @@ guard_kind() {
 # since a scheduled run can land just after a merge.
 deploy_health() {
   case "$1" in runner|vercel|guard) ;; *) return 0 ;; esac
-  case "$7" in failure|startup_failure|timed_out) echo "Deploys: the last scheduled deploy failed; main is not reaching production. Open the Deploy workflow's last run."; return 0 ;; esac
+  case "$7" in
+    failure|startup_failure|timed_out) echo "Deploys: the last scheduled deploy failed; main is not reaching production. Open the Deploy workflow's last run."; return 0 ;;
+    fellback) echo "Deploys: the last deploy fell back to a build on Vercel because the runner build failed, so it billed Vercel build minutes. Open the Deploy workflow's last run, job build-on-runner."; return 0 ;;
+  esac
   if [ -z "$3" ]; then
     [ "$1" = guard ] || echo "Deploys: no deploy is recorded yet; run the Deploy workflow once from the Actions tab."
     return 0
@@ -118,7 +160,8 @@ deploy_health() {
   [ "$2" != "$3" ] || return 0
   case "$4" in ''|*[!0-9]*) return 0 ;; esac
   dh_age=$(( ($5 - $4) / 60 ))
-  if [ "$dh_age" -ge $(( ${6:-60} * 2 )) ]; then
+  dh_iv=${6:-60}; [ "$dh_iv" -ge 30 ] 2>/dev/null || dh_iv=30
+  if [ "$dh_age" -ge $(( dh_iv * 2 )) ]; then
     echo "Deploys: main has changes waiting $dh_age minutes that are not in production (the interval is ${6:-60}); check the Deploy workflow and the runner."
   fi
 }

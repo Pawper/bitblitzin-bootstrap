@@ -37,6 +37,7 @@ Many agents work here at once. Each kind of thing has one home, every rule has s
 - Every date written here is the owner's local day, named in the Stack section above; the session brief prints today. A UTC timestamp from gh or a runner log is converted first, or an evening's work is dated tomorrow.
 - Report what was not done and why, not only what was. Say which commands were refused.
 - No wait loops; bounded commands; stop every shell when done.
+- The plugin's scripts live at the path the session brief prints on its "Plugin:" line. `$CLAUDE_PLUGIN_ROOT` is set for hooks but empty in the Bash tool, so use that path in commands.
 - At session start, reply from the session brief. Never run one network call per branch, worktree or issue in the foreground; one call for the whole board is `sh "$CLAUDE_PLUGIN_ROOT/hooks/scripts/board-now.sh"`. Count long lists, do not print them.
 - A clean folder is part of done. Before you report finished or open a pull request, `git status` shows nothing outside `.scratch/`. Commit the files, or list them in the pull request as deliberately left out.
 - One scratch folder, `.scratch/`, which git ignores. Probe scripts, screenshots and notes go there and nowhere else, so any other untracked file means real work. Stage with `git add -A`; `git add .scratch` fails because the folder is ignored, and that is right.
