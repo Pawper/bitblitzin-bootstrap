@@ -17,10 +17,10 @@ long_hit=$(long_command_reason "$cmd" "$desc")
 case "$long_hit" in
   "") ;;
   "no description")
-    printf '%s\n' "Blocked a Bash call with no description, because the task window shows the raw command instead of a title; add a short description saying what the command does." >&2
+    printf '%s\n' "Blocked a Bash call with no description: the task window shows the raw command instead of a title. The command itself is fine; call it again with the Bash tool's \`description\` field set to a few words saying what it does." >&2
     exit 2 ;;
   *)
-    printf '%s\n' "Blocked a Bash call of $long_hit, because a program pasted into the command fills the task window with its source and has no name; write it to .scratch/NAME.sh (or .py) with the Write tool, run it as \`sh .scratch/NAME.sh\`, and give the call a one-line description." >&2
+    printf '%s\n' "Blocked a Bash call of $long_hit of code (quoted text is not counted), because a program pasted into the command fills the task window with its source and has no name; write it to .scratch/NAME.sh (or .py) with the Write tool, run it as \`sh .scratch/NAME.sh\`, and give the call a one-line description. A long pull request or issue body goes in a file: \`-F body=@.scratch/body.md\`." >&2
     exit 2 ;;
 esac
 

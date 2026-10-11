@@ -14,6 +14,7 @@
 #   sh "$CLAUDE_PLUGIN_ROOT/scripts/board/read.sh" [--batch 8] [--all]
 # --all re-reads every open item, ignoring the saved digest.
 here=$(dirname "$0")
+. "$here/../../hooks/scripts/lib.sh"
 . "$here/board-lib.sh"
 
 size=8; all=no
@@ -24,8 +25,11 @@ done
 
 dir=.scratch/board
 mkdir -p "$dir/items"
-facts=$(sh "$here/../../hooks/scripts/board-now.sh" 2>/dev/null) || facts=""
-if [ -z "$facts" ]; then echo "gh is not available or not signed in; the board cannot be read."; exit 0; fi
+facts=$(sh "$here/../../hooks/scripts/board-now.sh" 2>"$dir/facts.err") || facts=""
+if [ -z "$facts" ]; then
+  if [ "$(gh_refusal "$(cat "$dir/facts.err" 2>/dev/null)")" = yes ]; then echo "GitHub refused the board read for its rate limit (GraphQL's secondary limit); try again in a few minutes."; exit 1; fi
+  echo "gh is not available or not signed in; the board cannot be read."; exit 0
+fi
 printf '%s\n' "$facts" > "$dir/facts.tsv"
 
 digest=""

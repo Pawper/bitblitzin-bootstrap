@@ -11,8 +11,8 @@
 here=$(dirname "$0")
 . "$here/numbering-lib.sh"
 
-base=$1; head=$2
-[ -n "$base" ] && [ -n "$head" ] || { echo "Usage: sh scripts/ci/numbering-check.sh BASE HEAD" >&2; exit 2; }
+base=${1:-origin/main}; head=${2:-HEAD}
+# By hand, with no arguments, it compares the checkout with origin/main.
 fail=0
 
 if [ -f .claude/numbering.txt ]; then

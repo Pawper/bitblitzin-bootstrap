@@ -296,6 +296,18 @@ task_tier() {
   echo routine
 }
 
+# gh_refusal TEXT
+# Print "yes" when gh's error output means GitHub refused the call for a
+# rate limit rather than the user being signed out: "rate limit",
+# "secondary", "abuse", or the "unknown owner type" that gh project prints
+# when its GraphQL query is refused. Print "no" otherwise.
+gh_refusal() {
+  case $(printf '%s' "$1" | tr 'A-Z' 'a-z') in
+    *"rate limit"*|*"secondary"*|*"abuse"*|*"unknown owner type"*) echo yes ;;
+    *) echo no ;;
+  esac
+}
+
 # long_command_reason COMMAND DESCRIPTION [MAX_LINES] [MAX_CHARS]
 # Print why a Bash call should be a script file and a title instead: "N
 # lines" or "N characters" when COMMAND runs past MAX_LINES (default 12)
@@ -304,9 +316,31 @@ task_tier() {
 # with its source and has no name; the same program in .scratch/, run by
 # name with a one-line description, is a titled task and a file the rules
 # already ask for. Print nothing when the call is short and titled.
+# Quoted text is not code: a pull request body passed as -f body="..." is
+# the common long call and is not what the limit is for, so the contents
+# of single- and double-quoted strings are dropped before counting (the
+# quote marks stay). A heredoc still counts; that is the program case.
+code_only() {
+  printf '%s' "$1" | awk '
+    BEGIN { RS = "\001" }
+    {
+      s = $0; out = ""; q = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (q == "s") { if (c == "\047") { q = ""; out = out c }; continue }
+        if (q == "d") { if (c == "\\") { i++; continue } if (c == "\"") { q = ""; out = out c }; continue }
+        if (c == "\047") { q = "s"; out = out c; continue }
+        if (c == "\"") { q = "d"; out = out c; continue }
+        out = out c
+      }
+      printf "%s", out
+    }'
+}
+
 long_command_reason() {
-  lc_lines=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
-  lc_chars=$(printf '%s' "$1" | wc -c | tr -d ' ')
+  lc_code=$(code_only "$1")
+  lc_lines=$(printf '%s\n' "$lc_code" | wc -l | tr -d ' ')
+  lc_chars=$(printf '%s' "$lc_code" | wc -c | tr -d ' ')
   if [ "$lc_lines" -gt "${3:-12}" ]; then echo "$lc_lines lines"; return 0; fi
   if [ "$lc_chars" -gt "${4:-1000}" ]; then echo "$lc_chars characters"; return 0; fi
   [ -n "$(printf '%s' "$2" | tr -d ' \t\r\n')" ] || echo "no description"

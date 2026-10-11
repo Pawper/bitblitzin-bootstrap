@@ -19,12 +19,12 @@ if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
   exit 0
 fi
 
-issue=$(gh issue list --label drive --state open --limit 1 --json number --jq '.[0].number' 2>/dev/null)
+issue=$(gh api "repos/{owner}/{repo}/issues?labels=drive&state=open&per_page=1" --jq '.[0].number' 2>/dev/null)
 [ -n "$issue" ] || { echo "nothing: no open issue labeled drive"; exit 0; }
 
 me=$(gh api user --jq .login 2>/dev/null)
 tab=$(printf '\t')
-comments=$(gh issue view "$issue" --json comments --jq '.comments[] | [.createdAt, .author.login, (.body | gsub("\t"; " ") | gsub("\r"; ""))] | @tsv' 2>/dev/null)
+comments=$(gh api "repos/{owner}/{repo}/issues/$issue/comments?per_page=100" --jq '.[] | [.created_at, .user.login, (.body | gsub("\t"; " ") | gsub("\r"; ""))] | @tsv' 2>/dev/null)
 [ -n "$comments" ] || { echo "nothing: no proposal on issue $issue yet"; exit 0; }
 
 proposal=""; proposal_at=""; reply=""; reply_by=""
