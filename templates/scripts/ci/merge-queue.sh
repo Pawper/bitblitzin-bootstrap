@@ -168,7 +168,8 @@ take_lock() {
   alive=no; [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null && alive=yes
   why=$(queue_lock_reason "$l" "$(date +%s)" "$alive")
   if [ -n "$why" ]; then
-    echo "Another queue is running: $why. Wait for it to finish rather than starting a second one."
+    last=$(tail -n 1 "$flaky_dir/log" 2>/dev/null | cut -c1-160)
+    echo "Another queue is running: $why${last:+; its last line: $last}. Wait for it to finish rather than starting a second one; follow it with tail -f .scratch/queue/log."
     exit 1
   fi
   printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "--$mode" > "$lock_file"
@@ -327,9 +328,18 @@ migration_blocks() {
   [ -n "$mb_glob" ] || return 0
   mb_manual=SETUP.md
   [ -f "$here/setup-paths.txt" ] && mb_manual=$(setup_manual "$(cat "$here/setup-paths.txt")")
-  git fetch -q origin "$base" "pull/$1/head" 2>/dev/null || return 0
+  # A gate that cannot look must block, not pass: a fetch that failed once
+  # let two unrun migrations onto main.
+  git fetch -q origin "$base" "pull/$1/head" 2>/dev/null || { echo "its migrations could not be checked (fetching pull/$1/head failed); try again"; return 0; }
   mb_head=$(git rev-parse FETCH_HEAD)
   mb_added=$(git diff --name-only --diff-filter=A "origin/$base...$mb_head" 2>/dev/null)
+  # Files added under a migrations folder that the glob does not match
+  # mean the glob is wrong, and the gate would see nothing; say so.
+  mb_stray=$(printf '%s\n' "$mb_added" | tr '\\' '/' | awk '/(^|\/)migrations\//' | while IFS= read -r mb_f; do
+    [ -n "$mb_f" ] || continue
+    set -f; case "$mb_f" in $mb_glob) ;; *) printf '%s\n' "$mb_f" ;; esac; set +f
+  done | head -n 1)
+  if [ -n "$mb_stray" ]; then echo "it adds $mb_stray under a migrations folder that the migration glob in .claude/numbering.txt ($mb_glob) does not match; fix the glob so the gate can see it"; return 0; fi
   mb_pending=$(pending_migrations "$(git show "$mb_head:$mb_manual" 2>/dev/null)" "$mb_added" "$mb_glob")
   [ -n "$mb_pending" ] || return 0
   printf '%s\n' "$mb_pending" | head -n 1 | awk -F'\t' -v m="$mb_manual" '{ printf "it adds migration %s, which is %s in %s; run it, mark it Done in the manual on this branch, then queue it again\n", $1, $2, m }'
@@ -377,6 +387,8 @@ serial_one() {
     return 0
   fi
   head_branch=$hb
+  why=$(migration_blocks "$pr")
+  if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; return 0; fi
   record_flaky "$pr" "" passed
   wait_quiet_main
   gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/merge" -f merge_method=squash >/dev/null 2>"$gh_err" || { rate_stop; batch_line "$pr" "not merged" "GitHub refused the merge: $(head -n 1 "$gh_err" 2>/dev/null)"; return 0; }

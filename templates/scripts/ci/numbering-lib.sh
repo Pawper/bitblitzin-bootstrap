@@ -95,7 +95,10 @@ pending_migrations() {
   printf '%s\n' "$1" | tr -d '\r' | awk -v added="$pm_added" '
     BEGIN { n = split(added, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") { want[a[i]] = 1; order[++c] = a[i] } }
     {
-      for (f in want) if (index($0, f) > 0) {
+      for (f in want) {
+        # The manual may name the file without its extension; both count.
+        b = f; sub(/\.[A-Za-z0-9]+$/, "", b)
+        if (index($0, f) == 0 && (b == "" || index($0, b) == 0)) continue
         seen[f] = 1
         if ($0 ~ /[Nn]ot yet run/ && $0 !~ /(^|[^A-Za-z])[Dd]one[ \t]+[0-9]/) pending[f] = 1
       }

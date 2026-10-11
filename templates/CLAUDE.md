@@ -37,11 +37,13 @@ Many agents work here at once. Each kind of thing has one home, every rule has s
 - No wait loops; bounded commands; stop every shell when done.
 - At session start, reply from the session brief. Never run one network call per branch, worktree or issue in the foreground; one call for the whole board is `sh "$CLAUDE_PLUGIN_ROOT/hooks/scripts/board-now.sh"`. Count long lists, do not print them.
 - A clean folder is part of done. Before you report finished or open a pull request, `git status` shows nothing outside `.scratch/`. Commit the files, or list them in the pull request as deliberately left out.
-- One scratch folder, `.scratch/`, which git ignores. Probe scripts, screenshots and notes go there and nowhere else, so any other untracked file means real work.
+- One scratch folder, `.scratch/`, which git ignores. Probe scripts, screenshots and notes go there and nowhere else, so any other untracked file means real work. Stage with `git add -A`; `git add .scratch` fails because the folder is ignored, and that is right.
 - Images and build output never go in a worktree. They belong in the work folder outside the repository.
 - A fix to shared code gets its own issue and its own pull request. Never patch shared code to get your own build through and ship only your part.
 - Stop what you started. Any server or watcher you started from a worktree ends before you finish. Never stop a build daemon (`gradlew --stop`, `nx reset`): it is shared by every build on the machine, including a self-hosted runner's job in flight.
 - Never move a branch from outside its worktree, never add a detached worktree, and never close a pull request without a comment saying why or what replaced it; `sh scripts/worktrees.sh close PR "reason"` does the whole ending.
+- Open a pull request with `sh scripts/pr-open.sh "TITLE" .scratch/body.md` and read its checks with `sh scripts/pr-checks.sh N`; both use REST. `gh pr create` and `gh pr checks` go through GraphQL, whose secondary limit trips first when many agents work at once.
+- A new worktree needs its packages before its first test: run the install (`npm ci` in each package with a lockfile) right after `git worktree add`. A first test run without it writes outside the repository.
 - Merge only through the queue: `sh scripts/ci/merge-queue.sh --drain` merges everything green, `--serial PR` one pull request. A direct `gh pr merge` is refused.
 - Never take a running number in a shared place. A task, a setup step or a note is named by its issue number ("#123"), which never collides. A file that must keep its order, such as a migration, takes its number from `sh scripts/next-number.sh migration`, which checks main and every open pull request.
 - A change that adds a migration merges after the migration has run: run it, mark its line Done in the manual on the same branch, then queue it.

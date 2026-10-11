@@ -390,6 +390,15 @@ eq "too many characters is named by count" "1200 characters" "$(long_command_rea
 eq "the limits can be set" "3 lines" "$(long_command_reason 'a
 b
 c' 'Three' 2)"
+eq "a long quoted body is not counted" "" "$(long_command_reason "gh api -X POST repos/o/r/pulls -f title=x -f body=\"$(head -c 1500 /dev/zero | tr '\0' 'y')\"" 'Open the pull request')"
+eq "a long quoted body with newlines is not counted" "" "$(long_command_reason "gh api -f body=\"$(seq 1 30 | tr '\n' ' ' | sed 's/ /\
+/g')\"" 'Open it')"
+eq "a long program in a heredoc still counts" "14 lines" "$(long_command_reason "python - <<'EOF'
+$(seq 1 12 | sed 's/^/print(/; s/$/)/')
+EOF" 'Run it')"
+eq "a rate limit is a refusal, not a sign-out" "yes" "$(gh_refusal 'GraphQL: API rate limit exceeded for user ID 1')"
+eq "unknown owner type is a refusal" "yes" "$(gh_refusal 'unknown owner type: Pawper')"
+eq "a sign-out is not" "no" "$(gh_refusal 'You are not logged into any GitHub hosts')"
 
 printf '\n# daemon_stop_reason\n'
 eq "gradlew --stop is refused" "gradlew --stop" "$(daemon_stop_reason './gradlew --stop')"
@@ -890,6 +899,8 @@ src/chimes.ts' 'supabase/migrations/*.sql')"
 eq "a migration marked done passes, even with the instruction text" "" "$(pending_migrations "$manual" 'supabase/migrations/0007_schedule_versions.sql' 'supabase/migrations/*.sql')"
 eq "a migration the manual never mentions" "0025_new.sql	not in the manual" "$(pending_migrations "$manual" 'supabase/migrations/0025_new.sql' 'supabase/migrations/*.sql')"
 eq "no migration added, nothing" "" "$(pending_migrations "$manual" 'src/a.ts' 'supabase/migrations/*.sql')"
+eq "a manual line without the extension still counts, and still blocks when not yet run" "0002_profiles.sql	not yet run" "$(pending_migrations '| 0002_profiles | Not yet run |' 'supabase/migrations/0002_profiles.sql' 'supabase/migrations/*.sql')"
+eq "a manual line without the extension marked done passes" "" "$(pending_migrations '| 0002_profiles | Done 2026-10-10 |' 'supabase/migrations/0002_profiles.sql' 'supabase/migrations/*.sql')"
 
 printf '\n# decision numbers inside a file\n'
 brief='## Decisions

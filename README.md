@@ -9,9 +9,9 @@
 A Claude Code plugin for projects where many coding agents work at once.</p>
 
 <p align="center">
-  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.7.7" src="https://img.shields.io/badge/version-0.7.7-110F17?labelColor=110F17&color=FFB347"></a>
+  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.7.8" src="https://img.shields.io/badge/version-0.7.8-110F17?labelColor=110F17&color=FFB347"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-110F17?labelColor=110F17&color=FF6EC7"></a>
-  <a href="#tests"><img alt="510 tests" src="https://img.shields.io/badge/tests-510%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
+  <a href="#tests"><img alt="518 tests" src="https://img.shields.io/badge/tests-518%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
   <a href="https://bitblitzin.com/bootstrap"><img alt="bitblitzin.com/bootstrap" src="https://img.shields.io/badge/site-bitblitzin.com%2Fbootstrap-110F17?labelColor=110F17&color=A8E36B"></a>
 </p>
 
@@ -236,6 +236,7 @@ All of them live in `templates/` and are meant to be copied into the project roo
 - `merge-queue.sh --drain`: merge everything that is green, round after round, batching when more than two are ready, until nothing is left or its bounds are reached. The answer to "merge what is ready", so nobody writes a loop. A red pull request gets one retry of its failed jobs; one that conflicts or fails twice is named at the end and the drain exits non-zero, so the agent running it is woken instead of a log line scrolling past. The queue also refuses a pull request that adds a migration its own manual still calls "Not yet run". The drain holds a lone serial merge while others are still in CI, so one merge does not send them back round; it makes every call through REST, which has its own budget and no points-based secondary limit, reads both budgets before each round, and backs off rather than retrying at once when GitHub refuses a call; a listing that fails is retried and never read as an empty queue; every line goes to `.scratch/queue/log` so a background run can be followed, and "Needs attention" names the failing jobs and their first error lines; a lock refuses a second queue; and `.github/workflows/queue-drain.yml` runs it every thirty minutes on a self-hosted runner so finished work never waits for a chat session.
 - `scripts/next-number.sh KIND` and `.claude/numbering.txt`: reserve the next free number for a file that must keep its order, such as a migration, across main and every open pull request, so two agents never take the same one. For anything that need not run in order, the rule is the issue number instead.
 - `scripts/ci/numbering-check.sh` and `task-files.txt`: a CI job that fails when two numbered files share a number, when a file such as a product brief defines one decision number twice, and when a change adds a task to a task file with a running number instead of its issue number. Running task numbers were the biggest source of merge conflicts on one busy day; two parallel pull requests both taking D55 was found only by comparing branches by hand. An ID kind is a three-field line in `.claude/numbering.txt`, such as `decision docs/product-brief.md D`, and `next-number.sh decision` reads that file on main and on every open pull request.
+- `scripts/pr-open.sh "TITLE" BODY_FILE` and `scripts/pr-checks.sh N`: open a pull request and read its checks through REST, so agents never reach for `gh pr create` or `gh pr checks`, which spend GraphQL points and trip its secondary limit first.
 - `scripts/protect-main.sh`: branch protection on main in one call, the way the queue needs it. `scripts/supabase-create.sh NAME`: the app's Supabase project in one approved command; it generates the database password, writes it and the project reference into `.env` and nowhere else, and prints no secret. `scripts/env-lib.sh` holds the pure helpers both use.
 - `.gitattributes`: `CHANGELOG.md`, a file a tool writes, merges as a union so two releases that each append a line keep both. No hand-edited page gets that: the conflict is the one signal that two pull requests are appending to a shared page. One project gave `tasks.md` a union merge and reached 64 appends to one file in a week before anyone noticed; tasks are issues, and a spec tool's `tasks.md` is written once at planning and not touched again.
 - Nothing appended to pass a check. A pull request names its spec in its body (`Spec: specs/<feature>`) and changes the spec only when the design changed; `setup-paths.txt` lists only files whose change is a step a person takes (a migration, a variable, a container), not manifests or workflows; and the `!rerun-free` line in `classes.txt` names the classes (`docs`, `specs`, `status`) whose moves on main never cost a green pull request a re-run. Before this, three checks each rewarded appending a line to a shared file, and the queue then re-ran every green pull request for it, one at a time.
@@ -405,7 +406,7 @@ ok    no overlap merges
 ok    overlap reruns
 ok    ci on main reruns
 
-510 passed, 0 failed
+518 passed, 0 failed
 ```
 
 ## License, privacy and terms

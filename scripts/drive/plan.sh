@@ -42,13 +42,20 @@ fi
 if [ -n "$facts_file" ] && [ -f "$facts_file" ]; then
   facts=$(cat "$facts_file")
 else
-  facts=$(sh "$here/../../hooks/scripts/board-now.sh" 2>/dev/null) || facts=""
+  facts=$(sh "$here/../../hooks/scripts/board-now.sh" 2>"${TMPDIR:-/tmp}/board-now.$$.err") || facts=""
 fi
 if [ -z "$facts" ]; then
-  echo "gh is not available or not signed in; the round cannot read the project."
-  echo "stop: unavailable"
+  if [ "$(gh_refusal "$(cat "${TMPDIR:-/tmp}/board-now.$$.err" 2>/dev/null)")" = yes ]; then
+    echo "GitHub refused the board read for its rate limit (GraphQL's secondary limit; REST may still be fine); try the round again in a few minutes, and keep one queue and one drive at a time."
+    echo "stop: rate-limited"
+  else
+    echo "gh is not available or not signed in; the round cannot read the project."
+    echo "stop: unavailable"
+  fi
+  rm -f "${TMPDIR:-/tmp}/board-now.$$.err" 2>/dev/null
   exit 0
 fi
+rm -f "${TMPDIR:-/tmp}/board-now.$$.err" 2>/dev/null
 
 rules=""
 [ -f scripts/ci/classes.txt ] && [ -f scripts/ci/lib.sh ] && rules=$(cat scripts/ci/classes.txt)

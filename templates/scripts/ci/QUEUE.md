@@ -59,6 +59,10 @@ Never write a watch loop around the queue, and never run `gh run watch` with its
 
 The drain workflow's `QUEUE_TOKEN` decides whose budget the queue's polling spends. A token of the owner shares the owner's 5,000 with every agent on the machine. A token from a separate machine account gives the queue its own 5,000, and the workflows' default `GITHUB_TOKEN` has its own per-repository budget as well, so the scheduled workflows never compete with the agents.
 
+## Opening and reading pull requests without GraphQL
+
+`sh scripts/pr-open.sh "TITLE" BODY_FILE [BASE] [HEAD]` opens a pull request through REST, with the body read from a file, and prints its address; `sh scripts/pr-checks.sh N` prints the check runs on a pull request's head, one per line, and the one-word rollup the queue reads. Both spend the REST budget and nothing else. `gh pr create` and `gh pr checks` go through GraphQL.
+
 ## Only through the queue
 
 A direct `gh pr merge` is refused by the plugin's merge hook in any project that has this script, with one line pointing here. The queue is what checks the folder, waits for a quiet main, batches, cleans up the worktree and records flaky tests; a merge that skips it skips all of that.
