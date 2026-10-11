@@ -12,16 +12,22 @@ on:
 permissions:
   issues: write
   pull-requests: read
+  actions: read
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Find issues without a State and issues left stale by a merge
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         shell: sh
         run: |
           . scripts/ci/lib.sh
@@ -54,7 +60,21 @@ jobs:
           remote=$(git ls-remote --heads origin | sed 's#.*refs/heads/##')
           branches=$(ended_remote_branches "$remote" "$ended" "${{ github.event.repository.default_branch }}")
 
+          # Deploys: the scheduled path's last run and recorded commit, or,
+          # for the guard path, the commit Vercel reports in production.
+          deploy=""
+          if [ -f .claude/deploy.json ] && [ -f scripts/ci/deploy-health.sh ]; then
+            last_run=$(gh run list --workflow deploy.yml --limit 1 --json conclusion --jq '.[0].conclusion // ""' 2>/dev/null || true)
+            in_prod=""
+            if grep -q '"guard"' .claude/deploy.json && [ -n "$VERCEL_TOKEN" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
+              in_prod=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v6/deployments?projectId=$VERCEL_PROJECT_ID&teamId=$VERCEL_ORG_ID&target=production&state=READY&limit=1" \
+                | sed -n 's/.*"githubCommitSha":"\([0-9a-f]*\)".*/\1/p' | head -n 1)
+            fi
+            deploy=$(sh scripts/ci/deploy-health.sh "$in_prod" "$last_run")
+          fi
+
           body=$(audit_comment "$missing" "$stale" "$red" "$branches")
+          if [ -n "$deploy" ]; then body=$(printf '%s\n\n- %s' "$body" "$deploy" | sed '/./,$!d'); fi
           if [ -z "$body" ]; then
             echo "Clean. Nothing to say."
             exit 0

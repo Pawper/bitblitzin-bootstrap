@@ -1040,6 +1040,99 @@ Only 1 of 2 self-hosted runner(s) online; one runner makes every job wait for th
 eq "two online runners are fine" "" "$(runner_problems "$(printf 'build-1\tonline\ttrue\nbuild-2\tonline\tfalse\n')")"
 eq "no runners listed, nothing said" "" "$(runner_problems '')"
 
+printf '\n# deploys: keeping the host'"'"'s build CPU down\n'
+. "$root/templates/scripts/ci/deploy-lib.sh"
+eq "app code ships" "yes" "$(ships_path 'src/app/page.tsx' .)"
+eq "a doc does not ship" "no" "$(ships_path 'docs/plan.md' .)"
+eq "a spec does not ship" "no" "$(ships_path 'specs/001-core/spec.md' .)"
+eq "Markdown anywhere does not ship" "no" "$(ships_path 'src/README.md' .)"
+eq "a test file does not ship" "no" "$(ships_path 'src/ui/mark.test.tsx' .)"
+eq "the tests folder does not ship" "no" "$(ships_path 'tests/unit/a.ts' .)"
+eq "supabase does not ship" "no" "$(ships_path 'supabase/migrations/0004.sql' .)"
+eq "workflows do not ship" "no" "$(ships_path '.github/workflows/ci.yml' .)"
+eq "in a monorepo, the app folder ships" "yes" "$(ships_path 'web/src/page.tsx' web)"
+eq "in a monorepo, another folder does not" "no" "$(ships_path 'android/app/Main.kt' web)"
+eq "in a monorepo, the app's own tests do not" "no" "$(ships_path 'web/tests/a.test.ts' web)"
+eq "a sibling folder with the same prefix does not" "no" "$(ships_path 'webapp/src/a.ts' web)"
+eq "the app's package file ships" "yes" "$(ships_path 'package.json' .)"
+eq "only docs and specs changed: skip" "skip" "$(deploy_skip 'docs/a.md
+specs/x/spec.md
+STATUS.md' .)"
+eq "one app file among docs: build" "build" "$(deploy_skip 'docs/a.md
+src/lib/x.ts' .)"
+eq "nothing changed: skip" "skip" "$(deploy_skip '' .)"
+eq "an unknown last deploy builds" "build" "$(deploy_throttle '' 5000 60)"
+eq "an hour after the last deploy builds" "build" "$(deploy_throttle 1000 4600 60)"
+eq "twenty minutes after waits forty" "wait 40" "$(deploy_throttle 1000 2200 60)"
+eq "a custom interval" "wait 10" "$(deploy_throttle 1000 1600 20)"
+eq "runner and secrets: the runner path" "runner" "$(deploy_path yes yes yes)"
+eq "secrets but no runner: a Vercel build on a schedule" "vercel" "$(deploy_path yes no yes)"
+eq "no secrets: the guard" "guard" "$(deploy_path yes yes no)"
+eq "not on Vercel: none" "none" "$(deploy_path no yes yes)"
+eq "hourly" "17 * * * *" "$(interval_cron 60)"
+eq "every three hours" "17 */3 * * *" "$(interval_cron 180)"
+eq "every thirty minutes" "*/30 * * * *" "$(interval_cron 30)"
+eq "never more often than five minutes" "*/5 * * * *" "$(interval_cron 1)"
+eq "from the root, no way back" "" "$(rel_to_root .)"
+eq "from web, one level" "../" "$(rel_to_root web)"
+eq "from apps/web, two" "../../" "$(rel_to_root apps/web/)"
+eq "Git deploys off is scheduled" "scheduled" "$(guard_kind '{"git": {"deploymentEnabled": false}}')"
+eq "the plugin's ignore step" "plugin" "$(guard_kind '{"ignoreCommand": "sh ../scripts/ci/vercel-ignore.sh"}')"
+eq "a HEAD^ diff is hand-written" "handwritten" "$(guard_kind '{"git": {"deploymentEnabled": {"main": true}}, "ignoreCommand": "git diff --quiet HEAD^ HEAD -- ."}')"
+eq "crons only is no guard" "none" "$(guard_kind '{"crons": [{"path": "/api/x"}]}')"
+eq "in step, nothing to say" "" "$(deploy_health runner abc abc '' 9000 60 success)"
+eq "a failed scheduled deploy is said" "Deploys: the last scheduled deploy failed; main is not reaching production. Open the Deploy workflow's last run." "$(deploy_health runner abc def 1000 9000 60 failure)"
+eq "nothing recorded on a scheduled path is said" "Deploys: no deploy is recorded yet; run the Deploy workflow once from the Actions tab." "$(deploy_health vercel abc '' '' 9000 60 '')"
+eq "nothing recorded on the guard is silent" "" "$(deploy_health guard abc '' '' 9000 60 '')"
+eq "changes waiting past twice the interval are said" "Deploys: main has changes waiting 150 minutes that are not in production (the interval is 60); check the Deploy workflow and the runner." "$(deploy_health runner abc def 1000 10000 60 success)"
+eq "changes waiting under twice the interval are not" "" "$(deploy_health runner abc def 1000 5000 60 success)"
+eq "no deploy path, nothing" "" "$(deploy_health none abc def 1000 99999 60 failure)"
+
+# The ignore step and the setup, run for real in a throwaway repository.
+dt=$(mktemp -d)
+(
+  cd "$dt" && git init -q -b main && git config user.email t@t && git config user.name t && git config core.autocrlf false && git config core.safecrlf false
+  mkdir -p scripts/ci web/src docs && cp "$root/templates/scripts/ci/deploy-lib.sh" "$root/templates/scripts/ci/vercel-ignore.sh" scripts/ci/
+  echo a > web/src/a.ts && echo d > docs/d.md && git add -A && GIT_COMMITTER_DATE='2000-01-01T00:00:00Z' git commit -q -m one
+  first=$(git rev-parse HEAD)
+  echo d2 > docs/d.md && git commit -qam docs
+  cd web
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$first sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "docs:$?"
+  echo b > src/a.ts && git commit -qam app
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$first sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "app:$?"
+  VERCEL_GIT_COMMIT_REF=feature VERCEL_GIT_PREVIOUS_SHA=$first sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "branch:$?"
+  now=$(git rev-parse HEAD)
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "same:$?"
+  echo c > src/a.ts && git commit -qam app2
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "throttled:$?"
+  VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=$now DEPLOY_INTERVAL_MINUTES=0 sh ../scripts/ci/vercel-ignore.sh >/dev/null; echo "no-throttle:$?"
+) 2>/dev/null | grep -E "^[a-z-]+:[0-9]$" > "$dt.out"
+eq "the ignore step skips docs-only since the last deploy" "docs:0" "$(sed -n 1p "$dt.out")"
+eq "the ignore step builds an app change since the last deploy, not only the last commit" "app:1" "$(sed -n 2p "$dt.out")"
+eq "the ignore step skips any branch but main" "branch:0" "$(sed -n 3p "$dt.out")"
+eq "the ignore step skips when nothing changed" "same:0" "$(sed -n 4p "$dt.out")"
+eq "the ignore step throttles a deploy under an hour after the last" "throttled:0" "$(sed -n 5p "$dt.out")"
+eq "with no interval it builds" "no-throttle:1" "$(sed -n 6p "$dt.out")"
+if command -v node >/dev/null 2>&1; then
+  (
+    cd "$dt" && mkdir -p .github/workflows && cp "$root/templates/.github/workflows/deploy.yml" .github/workflows/ && mkdir -p scripts && cp "$root/templates/scripts/deploy-setup.sh" scripts/
+    printf '{\n  "crons": [{"path": "/api/cron/cleanup", "schedule": "17 10 * * *"}]\n}\n' > web/vercel.json
+    PATH_SAVE=$PATH; sh scripts/deploy-setup.sh guard web 90 >/dev/null 2>&1; echo "guard:$?"
+    node -e 'const j=require("./web/vercel.json"); console.log(JSON.stringify([j.crons.length, j.git.deploymentEnabled.main, j.git.deploymentEnabled["*"], j.ignoreCommand]))'
+    sh scripts/deploy-setup.sh runner web 180 >/dev/null 2>&1; echo "runner:$?"
+    node -e 'const j=require("./web/vercel.json"); console.log(JSON.stringify([j.crons.length, j.git.deploymentEnabled, j.ignoreCommand === undefined]))'
+    grep -o 'cron: "[^"]*"' .github/workflows/deploy.yml
+    tr -d ' \n' < .claude/deploy.json | sed 's/"_comment":"[^"]*",//'; echo
+  ) 2>/dev/null > "$dt.setup"
+  eq "the setup writes the guard and keeps the crons" "guard:0
+[1,true,false,\"sh ../scripts/ci/vercel-ignore.sh\"]" "$(sed -n 1,2p "$dt.setup")"
+  eq "the setup turns Git deploys off for the runner path and drops the ignore step" "runner:0
+[1,false,true]" "$(sed -n 3,4p "$dt.setup")"
+  eq "the setup writes the schedule from the interval" 'cron: "17 */3 * * *"' "$(sed -n 5p "$dt.setup")"
+  eq "the setup records the path, the folder and the interval" '{"path":"runner","appRoot":"web","intervalMinutes":180}' "$(sed -n 6p "$dt.setup")"
+fi
+mv "$dt" "$dt.done" 2>/dev/null || true
+
 printf '\n# owner console (node)\n'
 if command -v node >/dev/null 2>&1; then
   if node --test --test-reporter tap "$root"/console/test/*.test.js >"$root/tests/console.log" 2>&1; then

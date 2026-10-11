@@ -6,6 +6,7 @@
 .github/workflows/audit.yml
 .github/workflows/board-sync.yml
 .github/workflows/queue-drain.yml
+.github/workflows/deploy.yml
 .github/workflows/runner-check.yml
 .github/workflows/runner-watch.yml
 .github/workflows/state-label.yml
@@ -27,6 +28,10 @@ scripts/ci/RUNNERS.md
 scripts/ci/add-runner.ps1
 scripts/ci/batch-lib.sh
 scripts/ci/classify.sh
+scripts/ci/deploy-lib.sh
+scripts/ci/deploy-health.sh
+scripts/ci/vercel-ignore.sh
+scripts/deploy-setup.sh
 scripts/ci/client-env-check.sh
 scripts/ci/smoke.mjs
 .github/workflows/smoke.yml
