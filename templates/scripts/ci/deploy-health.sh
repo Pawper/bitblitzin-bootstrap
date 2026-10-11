@@ -12,10 +12,11 @@
 here=$(dirname "$0")
 . "$here/deploy-lib.sh"
 [ -f .claude/deploy.json ] || exit 0
-cfg=$(tr -d '\r\n' < .claude/deploy.json)
-path=$(printf '%s' "$cfg" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
-app=$(printf '%s' "$cfg" | sed -n 's/.*"appRoot"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'); [ -n "$app" ] || app=.
-interval=$(printf '%s' "$cfg" | sed -n 's/.*"intervalMinutes"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p'); [ -n "$interval" ] || interval=60
+cfg=$(cat .claude/deploy.json)
+path=$(json_string "$cfg" path)
+app=$(json_string "$cfg" appRoot); [ -n "$app" ] || app=.
+interval=$(json_number "$cfg" intervalMinutes); [ -n "$interval" ] || interval=60
+extra=$(json_words "$cfg" neverShips)
 
 main=$(git rev-parse -q --verify origin/main 2>/dev/null || git rev-parse HEAD)
 deployed=$1
@@ -27,7 +28,7 @@ fi
 oldest=""
 if [ -n "$deployed" ] && [ "$deployed" != "$main" ] && git cat-file -e "$deployed^{commit}" 2>/dev/null; then
   for c in $(git rev-list --reverse "$deployed..$main" 2>/dev/null); do
-    if [ "$(deploy_skip "$(git diff-tree --no-commit-id --name-only -r -m "$c" 2>/dev/null)" "$app")" = build ]; then
+    if [ "$(deploy_skip "$(git diff-tree --no-commit-id --name-only -r -m "$c" 2>/dev/null)" "$app" "$extra")" = build ]; then
       oldest=$(git log -1 --format=%ct "$c"); break
     fi
   done

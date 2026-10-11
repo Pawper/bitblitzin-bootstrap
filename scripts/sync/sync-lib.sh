@@ -5,7 +5,35 @@
 # OWNED is the text of templates/OWNED.txt. Print the plugin-owned paths,
 # one per line.
 owned_paths() {
-  printf '%s\n' "$1" | tr -d '\r' | awk 'NF && $1 !~ /^#/ && $1 != "default" { print $1 }'
+  printf '%s\n' "$1" | tr -d '\r' | awk 'NF && $1 !~ /^#/ && $1 != "default" && $1 != "feature" { print $1 }'
+}
+
+# owned_features OWNED
+# Each plugin-owned path with its feature, "feature<TAB>path", one per line,
+# from the "feature NAME" lines that group them. A path before any feature
+# line is in "core".
+owned_features() {
+  printf '%s\n' "$1" | tr -d '\r' | awk '
+    $1 == "feature" && NF >= 2 { f = $2; next }
+    NF && $1 !~ /^#/ && $1 != "default" { printf "%s\t%s\n", (f == "" ? "core" : f), $1 }'
+}
+
+# feature_of FEATURES PATH
+# The feature PATH belongs to, from owned_features' output.
+feature_of() {
+  printf '%s\n' "$1" | awk -F'\t' -v p="$2" '$2 == p { print $1; exit }'
+}
+
+# adopted_features FEATURES PRESENT
+# The features a project uses: those whose anchor, the first file listed
+# for the feature, is in PRESENT (one path per line). Space separated, in
+# order. One stray file is not use: a project with the plugin's audit
+# workflow and its own board-state script does not use the plugin's board.
+adopted_features() {
+  printf '%s\n' "$1" | awk -F'\t' -v present="$2" '
+    BEGIN { n = split(present, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") have[a[i]] = 1 }
+    NF >= 2 { if (!($1 in seen)) { seen[$1] = 1; order[++c] = $1; if ($2 in have) used[$1] = 1 } }
+    END { s = ""; for (i = 1; i <= c; i++) if (order[i] in used) s = s (s == "" ? "" : " ") order[i]; print s }'
 }
 
 # default_paths OWNED
@@ -69,11 +97,13 @@ workflow_needs() {
 }
 
 # ci_runs_on TEXT
-# The first "runs-on:" value in a workflow, as written ("ubuntu-latest" or
-# "[self-hosted, windows]"), or nothing when it is absent or still the
-# RUNS_ON placeholder. The sync copies it into a workflow it adds.
+# The first "runs-on:" value in a workflow that is a plain value, as
+# written ("ubuntu-latest" or "[self-hosted, windows]"), or nothing when
+# there is none. Placeholders and expressions are skipped: one project's
+# first runs-on read another job's outputs, and copying it would have
+# broken the workflow it was copied into.
 ci_runs_on() {
-  printf '%s\n' "$1" | tr -d '\r' | sed -n 's/^[ \t]*runs-on:[ \t]*//p' | sed 's/[ \t]*#.*//; s/[ \t]*$//' | awk '$0 != "" && $0 != "RUNS_ON" { print; exit }'
+  printf '%s\n' "$1" | tr -d '\r' | sed -n 's/^[ \t]*runs-on:[ \t]*//p' | sed 's/[ \t]*#.*//; s/[ \t]*$//' | awk '$0 != "" && $0 != "RUNS_ON" && index($0, "${{") == 0 { print; exit }'
 }
 
 # ci_shell TEXT
@@ -89,13 +119,20 @@ ci_shell() {
 # string, which both turn "\b" into a backspace byte; and the replacement
 # is by position, never gsub, so "&" and backslashes in VALUE are kept.
 # A Windows shell path once lost its backslashes this way and GitHub
-# refused the workflow.
+# refused the workflow. Only a whole word is replaced: NAME inside a longer
+# name (RUNS_ON in DEPLOY_RUNS_ON) is left alone.
 fill_placeholder() {
   FP_NAME=$2 FP_VALUE=$3 awk '
+    function word(c) { return c ~ /[A-Za-z0-9_]/ }
     BEGIN { name = ENVIRON["FP_NAME"]; val = ENVIRON["FP_VALUE"]; n = length(name) }
     {
       line = $0; out = ""
-      while (n > 0 && (i = index(line, name)) > 0) { out = out substr(line, 1, i - 1) val; line = substr(line, i + n) }
+      while (n > 0 && (i = index(line, name)) > 0) {
+        before = (i > 1) ? substr(line, i - 1, 1) : ""; after = substr(line, i + n, 1)
+        if (word(before) || word(after)) { out = out substr(line, 1, i + n - 1) }
+        else { out = out substr(line, 1, i - 1) val }
+        line = substr(line, i + n)
+      }
       print out line
     }' <<FPEOF
 $1

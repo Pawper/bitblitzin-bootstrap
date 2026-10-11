@@ -33,6 +33,10 @@ A drain started with `/loop` runs only while that session is open; close the app
 
 With a session open as well, `/loop 20m sh scripts/ci/merge-queue.sh --drain` still works; the lock refuses the second of two that overlap.
 
+## The queue runs from a copy of itself
+
+At start the queue copies `scripts/ci` and the worktree scripts to a temporary folder and runs from there. A shell reads a script as it goes, so an agent switching the main checkout to another branch during a drain could otherwise change the queue's code mid-run.
+
 ## Reading a drain while it runs
 
 Every line the drain prints is also appended, with the time, to `.scratch/queue/log`, including the lines of the batch or serial runs it starts. A drain in the background can be followed with `tail -f .scratch/queue/log`. When the drain ends with "Needs attention", each pull request that failed CI twice comes with its failing check runs by name and the first error lines of each job's log, so the cause is in the output and not three more calls away. A listing that fails is reported as a failed listing and retried, never as an empty queue.
