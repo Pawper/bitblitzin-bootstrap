@@ -1,0 +1,127 @@
+# Deploy main to Vercel on a schedule, building on the project's own runner
+# when it can, so Vercel hosts the output and builds nothing. Build CPU was
+# nearly all of one owner's Vercel bill, because every push to every branch
+# was a build. Here nothing but this workflow deploys: vercel.json turns Git
+# deploys off, and this runs at most once per interval (the cron, which
+# scripts/deploy-setup.sh writes from the interval) and only when main has
+# moved in something the app ships since the last deployed commit.
+#
+# Paths, chosen by the DEPLOY_PATH repository variable:
+#   runner  build on the self-hosted runner, deploy the output prebuilt;
+#           when the runner is offline or the build fails, fall back to a
+#           build on Vercel for that run.
+#   vercel  a deploy that Vercel builds, still on the schedule.
+#
+# Needs repository secrets VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID.
+# ADMIN_TOKEN (administration: read), the same one the runner watch uses,
+# lets the plan see whether a runner is online; without it the plan assumes
+# one is, and a failed build still falls back. The last deployed commit is
+# recorded as refs/deploy/production, which the brief and the audit read.
+name: Deploy
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.plan.outputs.deploy }}
+      path: ${{ steps.plan.outputs.path }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          HAS_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+        shell: bash
+        run: |
+          . scripts/ci/deploy-lib.sh
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          app=$(jq -r '.appRoot // "."' .claude/deploy.json 2>/dev/null || echo .)
+          path=${DEPLOY_PATH:-$(jq -r '.path // "runner"' .claude/deploy.json 2>/dev/null || echo runner)}
+          if [ "$HAS_TOKEN" != true ]; then
+            echo "VERCEL_TOKEN is not set; nothing can deploy. Set VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID as repository secrets."
+            echo "deploy=no" >> "$GITHUB_OUTPUT"; exit 1
+          fi
+          deployed=$(git ls-remote origin refs/deploy/production | cut -f1)
+          if [ "$deployed" = "$sha" ]; then echo "main ($sha) is already in production."; echo "deploy=no" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -n "$deployed" ] && git cat-file -e "$deployed^{commit}" 2>/dev/null; then
+            if [ "$(deploy_skip "$(git diff --name-only "$deployed" "$sha")" "$app")" = skip ]; then
+              echo "Nothing the app ships changed since $deployed; recording $sha as deployed without a build."
+              gh api -X PATCH "repos/${{ github.repository }}/git/refs/deploy/production" -f sha="$sha" -F force=true >/dev/null
+              echo "deploy=no" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          fi
+          if [ "$path" = runner ] && [ -n "$ADMIN_TOKEN" ]; then
+            online=$(GH_TOKEN="$ADMIN_TOKEN" gh api "repos/${{ github.repository }}/actions/runners" --jq '[.runners[] | select(.status == "online")] | length' 2>/dev/null || echo 1)
+            if [ "${online:-0}" = 0 ]; then echo "No runner is online; this run builds on Vercel instead."; path=vercel; fi
+          fi
+          echo "Deploying $sha by the $path path."
+          echo "deploy=yes" >> "$GITHUB_OUTPUT"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+  build-on-runner:
+    needs: plan
+    if: needs.plan.outputs.deploy == 'yes' && needs.plan.outputs.path == 'runner'
+    runs-on: RUNS_ON
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: RUN_SHELL
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - name: Build here and deploy the output; Vercel builds nothing
+        run: |
+          npx --yes vercel@latest pull --yes --environment=production --token="${{ secrets.VERCEL_TOKEN }}"
+          npx --yes vercel@latest build --prod --token="${{ secrets.VERCEL_TOKEN }}"
+          npx --yes vercel@latest deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}"
+      - name: Record the deployed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/deploy/production" -f sha="${{ needs.plan.outputs.sha }}" -F force=true >/dev/null 2>&1 \
+            || gh api -X POST "repos/${{ github.repository }}/git/refs" -f ref=refs/deploy/production -f sha="${{ needs.plan.outputs.sha }}" >/dev/null
+
+  build-on-vercel:
+    # The fallback: the path is vercel, or the runner build failed.
+    needs: [plan, build-on-runner]
+    if: always() && needs.plan.outputs.deploy == 'yes' && (needs.plan.outputs.path == 'vercel' || needs.build-on-runner.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - name: Deploy, built on Vercel
+        run: npx --yes vercel@latest deploy --prod --yes --token="${{ secrets.VERCEL_TOKEN }}"
+      - name: Record the deployed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/deploy/production" -f sha="${{ needs.plan.outputs.sha }}" -F force=true >/dev/null 2>&1 \
+            || gh api -X POST "repos/${{ github.repository }}/git/refs" -f ref=refs/deploy/production -f sha="${{ needs.plan.outputs.sha }}" >/dev/null

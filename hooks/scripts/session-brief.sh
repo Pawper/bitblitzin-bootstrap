@@ -147,6 +147,14 @@ if has queue && command -v gh >/dev/null 2>&1; then
   [ -n "$rl_line" ] && add "$rl_line"
 fi
 
+# Deploys, only when the project's deploy path is not keeping up. One
+# bounded git ls-remote for the recorded production commit; nothing when
+# the project has no .claude/deploy.json.
+if [ -f .claude/deploy.json ] && [ -f scripts/ci/deploy-health.sh ]; then
+  dl=$(run_bounded 6 sh scripts/ci/deploy-health.sh 2>/dev/null || true)
+  [ -n "$dl" ] && add "$dl"
+fi
+
 # Leftover work and worktrees: local git only, one call each.
 if has leftover && [ "$have_git" = yes ]; then
   default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo main)

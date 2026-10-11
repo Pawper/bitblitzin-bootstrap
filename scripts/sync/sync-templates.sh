@@ -72,6 +72,24 @@ for f in .gitattributes .gitignore; do
   [ -n "$lines" ] && echo "  $f is yours; the template has lines it lacks: $(printf '%s' "$lines" | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
 done
 
+# Deploys: a project that deploys to Vercel with no guard builds every
+# branch; one with a hand-written guard may diff HEAD^..HEAD, which drops
+# the changes a skipped build held. Offer the setup either way.
+if [ -f "$tpl/scripts/ci/deploy-lib.sh" ]; then
+  . "$tpl/scripts/ci/deploy-lib.sh"
+  vj=$(git ls-files 'vercel.json' '*/vercel.json' 2>/dev/null | head -n 1)
+  vercel=no
+  { [ -n "$vj" ] || [ -d .vercel ] || grep -q '"vercel"\|"next"' package.json */package.json 2>/dev/null; } && vercel=yes
+  if [ "$vercel" = yes ] && [ ! -f .claude/deploy.json ]; then
+    kind=none; [ -n "$vj" ] && kind=$(guard_kind "$(cat "$vj")")
+    app=.; [ -n "$vj" ] && app=$(dirname "$vj")
+    case "$kind" in
+      handwritten) echo "  deploys:  $vj has a hand-written guard$(grep -q 'HEAD^' "$vj" && printf ' that diffs HEAD^..HEAD: when a push ends in a docs-only commit, the app changes before it are skipped and never deploy'); replace it: sh scripts/deploy-setup.sh \"\" $app" ;;
+      none) echo "  deploys:  this project deploys to Vercel with nothing keeping build CPU down; every branch builds. Run: sh scripts/deploy-setup.sh \"\" $app" ;;
+    esac
+  fi
+fi
+
 work=$(printf '%s%s%s' "$changed" "$missing" "$defaults" | tr -d ' ')
 if [ -z "$work" ]; then echo "Everything the plugin owns is current."; exit 0; fi
 if [ "$apply" = no ]; then echo "Nothing was changed. Add --apply to write these on a new branch."; exit 0; fi

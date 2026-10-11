@@ -39,3 +39,18 @@ One line per migration, in order, with the date it ran in production. The newest
 | Service | What it does for us | Status page |
 |---|---|---|
 | SERVICE | One line | URL |
+
+## Deploys
+
+How main reaches production, written by `sh scripts/deploy-setup.sh` into `.claude/deploy.json`. Build CPU is most of a Vercel bill, so nothing builds a branch, nothing builds for a change that does not ship, and at most one deploy runs per interval.
+
+| Setting | Value |
+|---|---|
+| Path | DEPLOY_PATH: `runner` (built on our runner, deployed prebuilt), `vercel` (a scheduled deploy Vercel builds) or `guard` (Git deploys from main, skipped when nothing ships, throttled) |
+| App folder | APP_ROOT |
+| Interval | INTERVAL minutes |
+| Secrets, for `runner` and `vercel` | `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; optional `ADMIN_TOKEN` |
+| Build machine | Standard, in the Vercel project's settings |
+| Spend cap | Set in the Vercel team's billing |
+
+To deploy now: run the Deploy workflow from the Actions tab (`runner`, `vercel`), or push to main (`guard`).
