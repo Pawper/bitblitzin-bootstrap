@@ -815,6 +815,29 @@ eq "a run still going is pending" "pending" "$(rest_rollup 'success
 in_progress')"
 eq "red beats pending" "red" "$(rest_rollup 'queued
 timed_out')"
+eq "a cancelled job is not red" "cancelled" "$(rest_rollup 'success
+cancelled')"
+eq "a failure beside a cancel is red" "red" "$(rest_rollup 'cancelled
+failure')"
+eq "a cancel still running is pending" "pending" "$(rest_rollup 'cancelled
+in_progress')"
+eq "a cancelled pull request is retried once" "51" "$(drain_retry "51	false	MERGEABLE	cancelled	main" main '')"
+eq "a cancelled pull request counts as waiting until its re-run" "1" "$(drain_waiting "51	false	MERGEABLE	cancelled	main" main '')"
+eq "cancelled again after its re-run needs attention" "51	had its CI cancelled twice" "$(drain_attention "51	false	MERGEABLE	cancelled	main" main '51')"
+eq "an issue a member closes is carried" "Closes #64" "$(carried_refs 'An emote per title.
+
+Closes #64')"
+eq "fixes and resolves are carried as closes, once each" "Closes #12
+Closes #13" "$(carried_refs 'Fixes #12, resolves #13 and closes #12')"
+eq "a member's spec is carried" "Spec: specs/004-dashboard" "$(carried_refs 'Spec: specs/004-dashboard')"
+eq "a body with neither carries nothing" "" "$(carried_refs 'Just a copy fix.')"
+eq "the batch body carries its members' lines" "Carried from the members:
+
+Closes #64
+Spec: specs/004-dashboard" "$(batch_pr_body "$(printf '79\tAn emote\n')" 'Closes #64
+Spec: specs/004-dashboard
+Closes #64' | tail -n 4)"
+eq "the queue never reads FETCH_HEAD" "0" "$(grep -c 'rev-parse FETCH_HEAD' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "dirty is conflicting" "CONFLICTING" "$(mergeable_word dirty)"
 eq "clean is mergeable" "MERGEABLE" "$(mergeable_word clean)"
 eq "behind is still mergeable" "MERGEABLE" "$(mergeable_word behind)"

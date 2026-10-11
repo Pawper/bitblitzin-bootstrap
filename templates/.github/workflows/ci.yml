@@ -64,6 +64,23 @@ jobs:
         # "pytest --splits 4 --group ${{ matrix.shard }}" or "vitest --shard=N/4".
         run: echo "replace with the build and the app tests"
 
+  build:
+    # The production build, on every pull request that touches the app.
+    # Agents never build inside a worktree (build output does not belong
+    # there), so without this job nobody builds before merging; tests and
+    # the type-check passed on a client bug that only the build and a page
+    # load would show. Replace BUILD_COMMAND with the project's build, for
+    # example "npm ci && npm run build" in the app's folder.
+    needs: classify
+    if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'app') || contains(needs.classify.outputs.classes, 'other'))
+    runs-on: RUNS_ON
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail when a client file hands process.env to anything whole
+        run: sh scripts/ci/client-env-check.sh
+      - name: The production build
+        run: echo "replace with BUILD_COMMAND"
+
   data:
     needs: classify
     if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'data') || contains(needs.classify.outputs.classes, 'other'))
@@ -162,14 +179,14 @@ jobs:
     # per-class jobs in branch protection: they are skipped when a change does
     # not need them, and a required check that never reports blocks the merge.
     name: CI passed
-    needs: [classify, app, data, docs, spec-check, setup-check, shared-check, numbering-check, line-endings, status-page]
+    needs: [classify, app, build, data, docs, spec-check, setup-check, shared-check, numbering-check, line-endings, status-page]
     if: always() && github.event_name == 'pull_request'
     runs-on: RUNS_ON
     steps:
       - name: Report once for every class check that ran
         run: |
           failed=0
-          for pair in "classify:${{ needs.classify.result }}" "app:${{ needs.app.result }}" "data:${{ needs.data.result }}" "docs:${{ needs.docs.result }}" "spec-check:${{ needs.spec-check.result }}" "setup-check:${{ needs.setup-check.result }}" "shared-check:${{ needs.shared-check.result }}" "numbering-check:${{ needs.numbering-check.result }}" "line-endings:${{ needs.line-endings.result }}" "status-page:${{ needs.status-page.result }}"; do
+          for pair in "classify:${{ needs.classify.result }}" "app:${{ needs.app.result }}" "build:${{ needs.build.result }}" "data:${{ needs.data.result }}" "docs:${{ needs.docs.result }}" "spec-check:${{ needs.spec-check.result }}" "setup-check:${{ needs.setup-check.result }}" "shared-check:${{ needs.shared-check.result }}" "numbering-check:${{ needs.numbering-check.result }}" "line-endings:${{ needs.line-endings.result }}" "status-page:${{ needs.status-page.result }}"; do
             job=${pair%%:*}
             result=${pair#*:}
             echo "$job: $result"
@@ -205,6 +222,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # A run superseded by a newer push to main is not a red main; only
+          # the newest commit on main can open the issue.
+          newest=$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)
+          if [ "$newest" != "${{ github.sha }}" ]; then echo "A newer commit is on main; this run was superseded, not red."; exit 0; fi
           open=$(gh issue list --label ci-red --state open --json number -q length)
           if [ "$open" = "0" ]; then
             gh issue create \

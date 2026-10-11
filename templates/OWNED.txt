@@ -27,6 +27,9 @@ scripts/ci/RUNNERS.md
 scripts/ci/add-runner.ps1
 scripts/ci/batch-lib.sh
 scripts/ci/classify.sh
+scripts/ci/client-env-check.sh
+scripts/ci/smoke.mjs
+.github/workflows/smoke.yml
 scripts/ci/doctor-lib.sh
 scripts/ci/lib.sh
 scripts/ci/line-endings.sh

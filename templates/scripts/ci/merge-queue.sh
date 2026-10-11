@@ -330,8 +330,14 @@ migration_blocks() {
   [ -f "$here/setup-paths.txt" ] && mb_manual=$(setup_manual "$(cat "$here/setup-paths.txt")")
   # A gate that cannot look must block, not pass: a fetch that failed once
   # let two unrun migrations onto main.
-  git fetch -q origin "$base" "pull/$1/head" 2>/dev/null || { echo "its migrations could not be checked (fetching pull/$1/head failed); try again"; return 0; }
-  mb_head=$(git rev-parse FETCH_HEAD)
+  # Fetch the pull request into a ref of its own and read that. Fetching
+  # main and the pull request together and then reading FETCH_HEAD names
+  # main, the first ref fetched: the gate compared main with itself, saw
+  # no migration added, and let three unrun migrations through.
+  git fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" "+refs/pull/$1/head:refs/queue/pr-$1" 2>/dev/null || { echo "its migrations could not be checked (fetching pull/$1/head failed); try again"; return 0; }
+  mb_head=$(git rev-parse "refs/queue/pr-$1")
+  mb_want=$(pr_field "$1" 2)
+  if [ -n "$mb_want" ] && [ "$mb_head" != "$mb_want" ]; then echo "its migrations could not be checked (fetched $mb_head, but the pull request's head is $mb_want); try again"; return 0; fi
   mb_added=$(git diff --name-only --diff-filter=A "origin/$base...$mb_head" 2>/dev/null)
   # Files added under a migrations folder that the glob does not match
   # mean the glob is wrong, and the gate would see nothing; say so.
@@ -450,7 +456,7 @@ take_lock
 if [ "$mode" = drain ]; then
   rounds=${rounds:-6}
   drain_minutes=${QUEUE_DRAIN_MINUTES:-90}
-  d_start=$(date +%s); round=0; tried=""; retried=""; attention=""
+  d_start=$(date +%s); round=0; tried=""; retried=""; attention=""; last_look=""
   while [ "$round" -lt "$rounds" ]; do
     round=$((round + 1))
     rate_guard
@@ -482,7 +488,7 @@ if [ "$mode" = drain ]; then
       rb=$(pr_field "$r" 1)
       rid=$(latest_run "$rb"); rid=${rid%%	*}
       if [ -n "$rid" ] && gh run rerun "$rid" --failed >/dev/null 2>&1; then
-        say "round $round: #$r failed CI; re-running its failed jobs once."
+        say "round $round: #$r failed or had a job cancelled; re-running its failed jobs once."
       fi
       retried="$retried $r"
     done
@@ -490,7 +496,7 @@ if [ "$mode" = drain ]; then
 %s
 ' "$attention" "$(drain_attention "$open" "$base" "$retried")" | sed '/^$/d' | sort -u -n)
     pick=$(drain_candidates "$open" "$base" "$tried")
-    waiting=$(drain_waiting "$open" "$base")
+    waiting=$(drain_waiting "$open" "$base" "$retried")
     n=$(printf '%s\n' "$pick" | sed '/^$/d' | wc -l | tr -d ' ')
     elapsed=$(( $(date +%s) - d_start ))
     if [ "$n" -gt 0 ] && [ "$(drain_hold "$n" "$waiting")" = yes ] && [ "$elapsed" -lt $((drain_minutes * 60)) ]; then
@@ -507,10 +513,21 @@ if [ "$mode" = drain ]; then
         sleep 120
         continue
       fi
-      if [ "$waiting" -gt 0 ]; then say "round $round: nothing new is green, and $waiting still running after $drain_minutes minutes; stopping."
-      else say "round $round: nothing left to merge."; fi
+      if [ "$waiting" -gt 0 ]; then say "round $round: nothing new is green, and $waiting still running after $drain_minutes minutes; stopping."; break; fi
+      # One more look a minute later before saying nothing is left: a pull
+      # request whose checks turned green just after this round's read, or
+      # had not reported yet, was once left behind with the queue "done".
+      if [ -z "$last_look" ]; then
+        last_look=1
+        say "round $round: nothing green right now; one more look in a minute before stopping."
+        sleep 60
+        round=$((round - 1))
+        continue
+      fi
+      say "round $round: nothing left to merge."
       break
     fi
+    last_look=""
     say "round $round: $n green pull request(s): $(printf '%s' "$pick" | tr '\n' ' ')"
     QUEUE_IN_DRAIN=1; export QUEUE_IN_DRAIN
     if [ "$n" -gt 2 ]; then sh "$0" --batch --base "$base" $pick 2>&1 | tee -a "$log_file" || true; else sh "$0" --serial --base "$base" $pick 2>&1 | tee -a "$log_file" || true; fi
@@ -601,13 +618,15 @@ if [ -n "$typecheck" ] && ! typecheck_ok "$(git -C "$wt" ls-files)" "$wt"; then
 fi
 
 carried=""
+refs=""
 dropped=""
 good=$(git -C "$wt" rev-parse HEAD)
 for pr in $prs; do
   why=$(folder_blocks "$pr"); [ -n "$why" ] || why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; continue; fi
   git -C "$wt" fetch -q origin "pull/$pr/head" || { batch_line "$pr" "dropped" "could not fetch it"; dropped="$dropped $pr"; continue; }
-  head=$(git -C "$wt" rev-parse FETCH_HEAD)
+  git -C "$wt" fetch -q origin "+refs/pull/$pr/head:refs/queue/pr-$pr" 2>/dev/null || true
+  head=$(git -C "$wt" rev-parse "refs/queue/pr-$pr")
   title=$(pr_field "$pr" 3); [ -n "$title" ] || title="PR $pr"
   if ! git -C "$wt" merge -q --no-ff --no-edit -m "Merge PR #$pr into $branch: $title" "$head" >/dev/null 2>&1; then
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
@@ -653,6 +672,8 @@ for pr in $prs; do
   good=$(git -C "$wt" rev-parse HEAD)
   carried="$carried$pr	$title
 "
+  refs="$refs$(carried_refs "$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq '.body // ""' 2>/dev/null)")
+"
   batch_line "$pr" "merged into the batch"
 done
 
@@ -670,7 +691,7 @@ if [ -f "$wt/status/build.sh" ]; then
 fi
 
 git -C "$wt" push -q -u origin "$branch"
-body=$(batch_pr_body "$carried")
+body=$(batch_pr_body "$carried" "$refs")
 batch_pr=$(gh api -X POST "repos/{owner}/{repo}/pulls" -f base="$base" -f head="$branch" -f title="Batch $day: $(printf '%s' "$carried" | wc -l | tr -d ' ') pull requests" -f body="$body" --jq .number 2>"$gh_err") || { rate_stop; echo "Could not open the batch pull request: $(head -n 1 "$gh_err" 2>/dev/null). The branch $branch is pushed; open it by hand or run the batch again."; exit 1; }
 echo "batch PR #$batch_pr opened; waiting for the one full CI run"
 if ! wait_for_run "$batch_pr" "$branch"; then
