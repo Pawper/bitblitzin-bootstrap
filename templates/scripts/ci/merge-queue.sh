@@ -193,6 +193,8 @@ take_lock() {
   why=$(queue_lock_reason "$l" "$(date +%s)" "$alive")
   if [ -n "$why" ]; then
     last=$(tail -n 1 "$flaky_dir/log" 2>/dev/null | cut -c1-160)
+    st=$(cat "$flaky_dir/drain.state" 2>/dev/null | head -n 1)
+    [ -n "$st" ] && last="$st; ${last}"
     echo "Another queue is running: $why${last:+; its last line: $last}. Wait for it to finish rather than starting a second one; follow it with tail -f .scratch/queue/log."
     exit 1
   fi
@@ -225,6 +227,13 @@ jobs_of() { # RUN_ID -> one job per line for run_verdict
     fi
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$conc" "$(iso_epoch "$started")" "$ann"
   done
+}
+
+# online_runners: how many self-hosted runners are online, or "unknown".
+# The owner's token can read them; ADMIN_TOKEN is used when set.
+online_runners() {
+  or_n=$(GH_TOKEN="${ADMIN_TOKEN:-${GH_TOKEN:-}}" gh api 'repos/{owner}/{repo}/actions/runners' --jq '[.runners[] | select(.status == "online")] | length' 2>/dev/null) || or_n=""
+  [ -n "$or_n" ] && echo "$or_n" || echo unknown
 }
 
 idle_runners() { gh api 'repos/{owner}/{repo}/actions/runners' --jq '[.runners[] | select(.status == "online" and .busy == false)] | length' 2>/dev/null || echo 0; }
@@ -308,6 +317,15 @@ wait_for_run() {
       echo "Waited $wait_minutes minutes for run $run_id; giving up for now. Run the queue again later."
       return 3
     fi
+    # A run still queued after five minutes with no runner online will not
+    # start: say so and stop rather than wait out the hour.
+    case "$run" in
+      *"	queued	"*|*"	queued")
+        if [ $(( $(date +%s) - w_start )) -gt 300 ] && [ "$(online_runners)" = 0 ]; then
+          echo "Run $run_id has been queued for five minutes and no self-hosted runner is online. Start a runner (scripts/ci/RUNNERS.md), then run the queue again."
+          return 3
+        fi ;;
+    esac
     sleep 30
   done
 }
@@ -559,6 +577,25 @@ if [ "$mode" = drain ]; then
       sleep 120
       continue
     fi
+    # Waiting on CI or on a machine? When every pending pull request's
+    # checks are queued and no runner is online, waiting is pointless.
+    queued_only=no
+    if [ "$waiting" -gt 0 ]; then
+      statuses=$(printf '%s\n' "$open" | awk -F'\t' -v b="$base" '$2 == "false" && $5 == b && $4 == "pending" { print $1 }' | while read -r w_num; do
+        w_sha=$(printf '%s\n' "$listed" | awk -F'\t' -v n="$w_num" '$1 == n { print $3; exit }')
+        [ -n "$w_sha" ] && gh api "repos/{owner}/{repo}/commits/$w_sha/check-runs?per_page=100" --jq '.check_runs[].status' 2>/dev/null
+      done)
+      queued_only=$(checks_queued_only "$statuses")
+      stall=$(runner_stall "$queued_only" "$(online_runners)")
+      printf 'round %s of %s; %s pull request(s) waiting%s\n' "$round" "$rounds" "$waiting" "$( [ "$queued_only" = yes ] && echo ' on queued checks, which no runner has taken')" > "$flaky_dir/drain.state"
+      if [ "$stall" = stop ]; then
+        say "round $round: $waiting pull request(s) wait on checks that are all queued, and no self-hosted runner is online. Start a runner (scripts/ci/RUNNERS.md), then run --drain again; waiting would change nothing."
+        break
+      elif [ "$stall" = unknown ] && [ -z "$said_unknown" ]; then
+        say "round $round: the checks are all queued, and the runners could not be read (set ADMIN_TOKEN to let the queue see them); if none is online, start one."
+        said_unknown=1
+      fi
+    fi
     if [ "$n" -eq 0 ]; then
       if [ "$waiting" -gt 0 ] && [ "$elapsed" -lt $((drain_minutes * 60)) ]; then
         say "round $round: nothing new is green; $waiting pull request(s) still running CI, waiting two minutes."
@@ -793,8 +830,14 @@ if ! wait_for_run "$batch_pr" "$branch"; then
   exit 1
 fi
 wait_quiet_main
-gh api -X PUT "repos/{owner}/{repo}/pulls/$batch_pr/merge" -f merge_method=merge >/dev/null 2>"$gh_err" || { rate_stop; echo "GitHub refused the batch merge: $(head -n 1 "$gh_err" 2>/dev/null). Nothing merged; run the batch again."; exit 1; }
+merged_sha=$(gh api -X PUT "repos/{owner}/{repo}/pulls/$batch_pr/merge" -f merge_method=merge --jq .sha 2>"$gh_err") || { rate_stop; echo "GitHub refused the batch merge: $(head -n 1 "$gh_err" 2>/dev/null). Nothing merged; run the batch again."; exit 1; }
 echo "batch PR #$batch_pr merged into $base with a merge commit"
+# GitHub can show a carried pull request as "closed, not merged", which
+# reads as abandoned. Say on each where it went.
+for pr in $(printf '%s' "$carried" | cut -f1); do
+  gh api -X POST "repos/{owner}/{repo}/issues/$pr/comments" -f body="Merged into $base in batch #$batch_pr (commit ${merged_sha:-unknown}), with its history kept. GitHub may show this pull request as closed rather than merged; its changes are on $base." >/dev/null 2>&1 || true
+  echo "#$pr merged via batch #$batch_pr"
+done
 for pr in $(printf '%s' "$carried" | cut -f1); do
   tidy_worktree "$(pr_field "$pr" 1)"
 done

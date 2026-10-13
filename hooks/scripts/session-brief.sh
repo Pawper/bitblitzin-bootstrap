@@ -152,6 +152,17 @@ if has queue && command -v gh >/dev/null 2>&1; then
   [ -n "$rl_line" ] && add "$rl_line"
 fi
 
+# Runners, only when the workflows use self-hosted ones and none is online:
+# then CI and the queue wait on a machine, not on tests. One bounded REST
+# call, made only in such a project.
+if grep -qs 'self-hosted' .github/workflows/*.yml 2>/dev/null && command -v gh >/dev/null 2>&1; then
+  rr=$(run_bounded 5 gh api 'repos/{owner}/{repo}/actions/runners' --jq '"\(.total_count)\t\([.runners[] | select(.status == "online")] | length)"' 2>/dev/null || true)
+  rr_total=${rr%%	*}; rr_online=${rr#*	}
+  if [ -n "$rr" ] && [ "${rr_total:-0}" -gt 0 ] 2>/dev/null && [ "$rr_online" = 0 ]; then
+    add "Runners: none of the $rr_total self-hosted runners is online, so CI and the merge queue will wait. Start one (scripts/ci/RUNNERS.md)."
+  fi
+fi
+
 # Deploys, only when the project's deploy path is not keeping up. One
 # bounded git ls-remote for the recorded production commit; nothing when
 # the project has no .claude/deploy.json.

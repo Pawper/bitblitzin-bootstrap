@@ -890,6 +890,23 @@ eq "split keeps the rest of the brief" "1" "$(sed -n 4p "$dd.out")"
 eq "split numbers decisions by file" "decision docs/decisions/*.md" "$(sed -n 5p "$dd.out")"
 eq "list reads them back" "| D2 | 2026-10-02 | Second thing. |" "$(sed -n 6p "$dd.out")"
 
+printf '\n# labels over REST, and waiting on a machine\n'
+eq "the state label replaces the old one and keeps the rest" '{"labels":["bug","task","state:in-progress"]}' "$(state_labels_json 'bug
+state:ready
+task' 'state:in-progress')"
+eq "no labels yet" '{"labels":["state:ready"]}' "$(state_labels_json '' 'state:ready')"
+eq "a quote in a label survives" '{"labels":["say \"hi\"","state:ready"]}' "$(state_labels_json 'say "hi"' 'state:ready')"
+eq "all queued is waiting on a machine" "yes" "$(checks_queued_only 'queued
+queued
+completed')"
+eq "one running is waiting on tests" "no" "$(checks_queued_only 'queued
+in_progress')"
+eq "nothing queued is not" "no" "$(checks_queued_only 'completed')"
+eq "queued with no runner online: stop" "stop" "$(runner_stall yes 0)"
+eq "queued with a runner online: wait" "" "$(runner_stall yes 1)"
+eq "queued and the runners unreadable: say so" "unknown" "$(runner_stall yes unknown)"
+eq "running: wait" "" "$(runner_stall no 0)"
+
 printf '\n# serial merges, enforced by the queue\n'
 eq "alone with nothing else ready may go" "" "$(serial_refusal '' '')"
 eq "a reason always may go" "" "$(serial_refusal '81 82 83' migration)"
