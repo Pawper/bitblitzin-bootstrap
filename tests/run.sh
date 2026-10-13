@@ -275,7 +275,7 @@ retries (3)
 rename (1)" "$(leftover_summary "$(printf 'main\t0 0\nretries\t3 12\nparser\t0 4\nrename\t1 0\n')" 5)"
 eq "nothing ahead, nothing said" "" "$(leftover_summary "$(printf 'main\t0 0\nparser\t0 4\n')" 5)"
 porcelain=$(cat "$fx/worktrees.porcelain")
-eq "worktrees counted with their folders" "Worktrees: 4 besides the main checkout, in 2 folders. Tidy with: sh scripts/worktrees.sh prune" "$(worktree_summary "$porcelain")"
+eq "worktrees counted with their folders, the agent runtime's apart" "Worktrees: 2 besides the main checkout, in 1 folder, and 2 made by Claude Code for dispatched agents in .claude/worktrees." "$(worktree_summary "$porcelain")"
 eq "only the main checkout, nothing said" "" "$(worktree_summary 'worktree /repo
 branch refs/heads/main')"
 
@@ -852,6 +852,61 @@ eq "a rate limit message is a refusal" "yes" "$(board_refusal 'GraphQL: API rate
 eq "a secondary limit is a refusal" "yes" "$(board_refusal 'You have exceeded a secondary rate limit')"
 eq "a missing field is not" "no" "$(board_refusal 'Project 3 has no State field')"
 eq "empty output is not" "no" "$(board_refusal '')"
+
+printf '\n# decisions, one file each\n'
+. "$root/templates/scripts/decisions-lib.sh"
+eq "table rows become number, date and text" "123	2026-10-13	Voice long lines in chunks.
+124	2026-10-13	No affirmation in the meditation." "$(decision_rows '| Decision | Date | What |
+|---|---|---|
+| D123 | 2026-10-13 | Voice long lines in chunks. |
+| D124 | 2026-10-13 | No affirmation in the meditation. |')"
+eq "a row without a date" "7		Sign-in is by email link." "$(decision_rows '| D7 | Sign-in is by email link. |')"
+eq "a slug from the first words" "voice-long-lines-in-sentence-chunks" "$(decision_slug 'Voice long lines in sentence chunks of about 40 tokens.')"
+eq "four-digit names" "0124-no-affirmation.md" "$(decision_name 124 no-affirmation)"
+eq "the table is in number order, whatever the file order" "| Decision | Date | What was decided |
+|---|---|---|
+| D123 | 2026-10-13 | Voice long lines in chunks. |
+| D124 | 2026-10-13 | No affirmation in the meditation. |" "$(decision_table "$(decision_file 124 2026-10-13 'No affirmation in the meditation.')
+@@@
+$(decision_file 123 2026-10-13 'Voice long lines in chunks.')
+@@@")"
+dd=$(mktemp -d)
+(
+  cd "$dd" && mkdir -p docs .claude scripts && cp "$root/templates/scripts/decisions.sh" "$root/templates/scripts/decisions-lib.sh" scripts/
+  printf '# Brief\n\nIntro.\n\n## Decisions\n\n| Decision | Date | What |\n|---|---|---|\n| D1 | 2026-10-01 | First thing. |\n| D2 | 2026-10-02 | Second thing. |\n\n## After\n\nMore.\n' > docs/product-brief.md
+  printf 'migration supabase/migrations/*.sql\ndecision docs/product-brief.md D\n' > .claude/numbering.txt
+  sh scripts/decisions.sh split >/dev/null
+  ls docs/decisions | tr '\n' ' '; echo
+  grep -c '^| D' docs/product-brief.md
+  grep -c 'scripts/decisions.sh new' docs/product-brief.md
+  grep -c '^## After' docs/product-brief.md
+  grep '^decision' .claude/numbering.txt
+  sh scripts/decisions.sh list | tail -n 1
+) > "$dd.out" 2>&1
+eq "split writes one file per decision" "0001-first-thing.md 0002-second-thing.md " "$(sed -n 1p "$dd.out")"
+eq "split leaves no decision row in the brief" "0" "$(sed -n 2p "$dd.out")"
+eq "split leaves a pointer" "1" "$(sed -n 3p "$dd.out")"
+eq "split keeps the rest of the brief" "1" "$(sed -n 4p "$dd.out")"
+eq "split numbers decisions by file" "decision docs/decisions/*.md" "$(sed -n 5p "$dd.out")"
+eq "list reads them back" "| D2 | 2026-10-02 | Second thing. |" "$(sed -n 6p "$dd.out")"
+
+printf '\n# serial merges, enforced by the queue\n'
+eq "alone with nothing else ready may go" "" "$(serial_refusal '' '')"
+eq "a reason always may go" "" "$(serial_refusal '81 82 83' migration)"
+eq "others ready and no reason is refused, naming them" "3 other green pull request(s) are ready to land with it (#81 #82 #83); merge them together with --drain (or --batch), or give the reason this one must land alone: --serial N --because migration|conflict|must-land-alone|\"why\"" "$(serial_refusal '81 82 83 ' '')"
+eq "the reason goes in the squash title" "Fix the chime (#79) [serial: migration]" "$(serial_title 'Fix the chime' 79 migration)"
+eq "no reason is alone" "Fix it (#80) [serial: alone]" "$(serial_title 'Fix it' 80 '')"
+eq "three serial merges in an hour are a burst" "Main took 3 serial merges within an hour (reasons: alone, alone, migration). Pull requests that are ready together should land as one batch: sh scripts/ci/merge-queue.sh --drain." "$(serial_bursts "$(printf '3000\tC (#3) [serial: migration]\n2000\tB (#2) [serial: alone]\n1000\tA (#1) [serial: alone]\n500\tMerge pull request #9 from x/batch-1\n')")"
+eq "two are not" "" "$(serial_bursts "$(printf '2000\tB (#2) [serial: alone]\n1000\tA (#1) [serial: alone]\n')")"
+eq "three spread over a day are not" "" "$(serial_bursts "$(printf '20000\tC [serial: alone]\n10000\tB [serial: alone]\n1000\tA [serial: alone]\n')")"
+eq "a conflict names its files" "conflicts with main in web/src/a.ts docs/product-brief.md; resolve it on the branch, then queue it again" "$(conflict_line 'web/src/a.ts
+docs/product-brief.md')"
+eq "a conflict with no files named still says so" "conflicts with main; resolve it on the branch, then queue it again" "$(conflict_line '')"
+eq "the queue waits on the CI workflow's run, not the newest of any" "1" "$(grep -c -- '--workflow "${QUEUE_CI_WORKFLOW:-ci.yml}"' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "agent worktrees are a known place, not a stray folder" "Worktrees: 2 besides the main checkout, in 1 folder, and 1 made by Claude Code for dispatched agents in .claude/worktrees." "$(worktree_summary 'worktree C:/r/app
+worktree C:/r/app-wt/a
+worktree C:/r/app-wt/b
+worktree C:/r/app/.claude/worktrees/agent-1')"
 
 printf '\n# the API budget and one queue at a time\n'
 eq "plenty left, no wait" "0" "$(rate_wait "4000	2000" 1000)"

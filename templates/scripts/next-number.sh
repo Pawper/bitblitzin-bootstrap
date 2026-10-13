@@ -49,7 +49,10 @@ default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null 
 git fetch -q origin 2>/dev/null || true
 on_main=$(git ls-tree -r --name-only "$default" 2>/dev/null || true)
 in_prs=""
-command -v gh >/dev/null 2>&1 && in_prs=$(gh pr list --state open --limit 100 --json files --jq '.[].files[].path' 2>/dev/null || true)
+# gh only with a GitHub remote: without one gh asks which repository and waits.
+case "$(git remote get-url origin 2>/dev/null)" in
+  *github.com*) command -v gh >/dev/null 2>&1 && in_prs=$(gh pr list --state open --limit 100 --json files --jq '.[].files[].path' 2>/dev/null || true) ;;
+esac
 here_now=$(git ls-files --others --cached 2>/dev/null || true)
 
 all=$(printf '%s\n%s\n%s\n' "$on_main" "$in_prs" "$here_now")

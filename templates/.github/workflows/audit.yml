@@ -78,7 +78,17 @@ jobs:
             deploy=$(sh scripts/ci/deploy-health.sh "$in_prod" "$last_run")
           fi
 
+          # Serial merges: more than two within an hour means pull requests
+          # that were ready together landed alone, each with its own CI run
+          # and deploy. The queue writes the reason into the merge title.
+          serial=""
+          if [ -f scripts/ci/batch-lib.sh ]; then
+            . scripts/ci/batch-lib.sh
+            serial=$(serial_bursts "$(git log --first-parent --since='1 day ago' --format='%ct%x09%s' "origin/${{ github.event.repository.default_branch }}" 2>/dev/null)")
+          fi
+
           body=$(audit_comment "$missing" "$stale" "$red" "$branches")
+          if [ -n "$serial" ]; then body=$(printf '%s\n\n- %s' "$body" "$serial" | sed '/./,$!d'); fi
           if [ -n "$deploy" ]; then body=$(printf '%s\n\n- %s' "$body" "$deploy" | sed '/./,$!d'); fi
           if [ -z "$body" ]; then
             echo "Clean. Nothing to say."

@@ -10,9 +10,17 @@
 #                   the one full CI run, merge it, then run the serial
 #                   queue for anything dropped.
 #
-#   --serial PR...  one at a time, as before. Merge a green PR without a
+#   --serial PR...  one at a time, by choice. Merge a green PR without a
 #                   re-run when main moved only outside its classes; update
 #                   the branch so CI runs again when it moved inside them.
+#                   Refused while other pull requests are green and ready
+#                   to land with it, unless it says why: --because
+#                   migration|conflict|must-land-alone|"reason". The reason
+#                   goes into the merge commit's title for the audit.
+#
+#   --drain [--deploy]  merge everything green, batching; with --deploy
+#                   (or --drain-then-deploy), start the Deploy workflow
+#                   afterwards when the project deploys on a schedule.
 #
 # Usage: sh scripts/ci/merge-queue.sh [--batch | --serial] [--base BRANCH] PR...
 #        sh scripts/ci/merge-queue.sh PR [BASE]            (one PR, serial, as before)
@@ -44,14 +52,20 @@ rules=$(cat "$here/classes.txt")
 mode=""
 base="main"
 prs=""
+because=""
+then_deploy=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --batch) mode=batch ;;
     --serial) mode=serial ;;
     --drain) mode=drain ;;
+    --drain-then-deploy) mode=drain; then_deploy=1 ;;
+    --deploy) then_deploy=1 ;;
+    --because) shift; because=$1 ;;
+    --because=*) because=${1#--because=} ;;
     --rounds) shift; rounds=$1 ;;
     --base) shift; base=$1 ;;
-    --help|-h) sed -n '2,25p' "$0"; exit 0 ;;
+    --help|-h) sed -n '2,35p' "$0"; exit 0 ;;
     *[!0-9]*) [ -z "$prs" ] || base=$1 ;;
     *) prs="$prs $1" ;;
   esac
@@ -193,8 +207,13 @@ iso_epoch() { # ISO 8601 -> epoch seconds, GNU or BSD date
   date -u -d "$1" +%s 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null || echo 0
 }
 
-latest_run() { # BRANCH -> "id<TAB>status<TAB>conclusion"
-  gh run list --branch "$1" --limit 1 --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId)\t\(.status)\t\(.conclusion // "")"' 2>"$gh_err" || true
+# latest_run BRANCH -> "id<TAB>status<TAB>conclusion": the newest run of the
+# CI workflow on the branch (QUEUE_CI_WORKFLOW, default ci.yml). The newest
+# run of any workflow was once a quick side workflow that finished first
+# and read as green, and GitHub refused the merge twice: "Required status
+# check CI passed is expected".
+latest_run() {
+  gh run list --branch "$1" --workflow "${QUEUE_CI_WORKFLOW:-ci.yml}" --limit 1 --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId)\t\(.status)\t\(.conclusion // "")"' 2>"$gh_err" || true
 }
 
 jobs_of() { # RUN_ID -> one job per line for run_verdict
@@ -381,6 +400,15 @@ serial_one() {
   merge_base=$(git merge-base "origin/$base" "$head")
   pr_classes=$(classify_paths "$(git diff --name-only "$merge_base" "$head")" "$rules")
   main_classes=$(classify_paths "$(git diff --name-only "$merge_base" "origin/$base")" "$rules")
+  # A conflict with main is said as one, with its files, instead of
+  # "updated" round after round while nothing can merge.
+  if [ "$(mergeable_word "$(pr_field "$pr" 5)")" = CONFLICTING ] || ! git merge-tree --write-tree origin/"$base" "$head" >/dev/null 2>&1; then
+    files=$(git merge-tree --write-tree --name-only origin/"$base" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    if [ "$(mergeable_word "$(pr_field "$pr" 5)")" = CONFLICTING ] || [ -n "$files" ]; then
+      batch_line "$pr" "not merged" "$(conflict_line "$files")"
+      return 0
+    fi
+  fi
   if [ "$(pr_rollup "$head")" != green ]; then
     run=$(latest_run "$hb"); run_id=${run%%	*}
     rate_stop
@@ -390,14 +418,27 @@ serial_one() {
       case $code in
         1) record_flaky "$pr" "$run_id" failed; why="$msg" ;;
         3) why="$msg" ;;
-        4) gh run rerun "$run_id" >/dev/null 2>&1 || true; why="$msg" ;;
+        4)
+          # A job cancelled before a runner took it is not a failure:
+          # re-run it and wait, rather than give up.
+          gh run rerun "$run_id" >/dev/null 2>&1 || true
+          batch_line "$pr" "waiting" "$msg; re-ran it and waiting for the result"
+          if wait_for_run "$pr" "$hb"; then rm -f "$flaky_dir/pr-$pr.tsv"; serial_one "$pr"; return 0; fi
+          return 0 ;;
       esac
     fi
     batch_line "$pr" "waiting" "$why"
     return 0
   fi
   if [ "$(needs_rerun "$pr_classes" "$main_classes" "$(rerun_free_classes "$rules")")" = yes ]; then
-    gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/update-branch" >/dev/null 2>"$gh_err" || rate_stop
+    if ! gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/update-branch" >/dev/null 2>"$gh_err"; then
+      rate_stop
+      case "$(cat "$gh_err" 2>/dev/null)" in
+        *onflict*) batch_line "$pr" "not merged" "$(conflict_line "$(git merge-tree --write-tree --name-only origin/"$base" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')")" ;;
+        *) batch_line "$pr" "not merged" "GitHub refused to update the branch: $(head -n 1 "$gh_err" 2>/dev/null)" ;;
+      esac
+      return 0
+    fi
     sync_worktree "$hb"
     batch_line "$pr" "updated" "main moved in its classes (PR: ${pr_classes:-none}; main: ${main_classes:-none}), CI runs again"
     return 0
@@ -407,7 +448,7 @@ serial_one() {
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; return 0; fi
   record_flaky "$pr" "" passed
   wait_quiet_main
-  gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/merge" -f merge_method=squash >/dev/null 2>"$gh_err" || { rate_stop; batch_line "$pr" "not merged" "GitHub refused the merge: $(head -n 1 "$gh_err" 2>/dev/null)"; return 0; }
+  gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/merge" -f merge_method=squash -f commit_title="$(serial_title "$(pr_field "$pr" 3)" "$pr" "${because:-alone}")" >/dev/null 2>"$gh_err" || { rate_stop; batch_line "$pr" "not merged" "GitHub refused the merge: $(head -n 1 "$gh_err" 2>/dev/null)"; return 0; }
   batch_line "$pr" "merged serially" "main moved only outside its classes"
   tidy_worktree "$head_branch"
 }
@@ -467,6 +508,7 @@ if [ "$mode" = drain ]; then
   rounds=${rounds:-6}
   drain_minutes=${QUEUE_DRAIN_MINUTES:-90}
   d_start=$(date +%s); round=0; tried=""; retried=""; attention=""; last_look=""
+  d_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   while [ "$round" -lt "$rounds" ]; do
     round=$((round + 1))
     rate_guard
@@ -548,6 +590,16 @@ if [ "$mode" = drain ]; then
     fi
   done
   say "queue done"
+  # --deploy: when the drain moved main and the project deploys on a
+  # schedule, start the Deploy workflow now rather than at the next hour.
+  # The guard path deploys from Git by itself.
+  if [ -n "$then_deploy" ]; then
+    d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
+    if [ "$d_end" = "$d_begin" ]; then say "Nothing merged, so nothing to deploy."
+    elif [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
+      gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what the drain merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
+    else say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."; fi
+  fi
   if [ -n "$attention" ]; then
     say "Needs attention:"
     printf '%s\n' "$attention" | while IFS="$tab" read -r a_num a_why; do
@@ -560,7 +612,28 @@ if [ "$mode" = drain ]; then
   exit 0
 fi
 
+# ready_others EXCLUDE: the open pull requests aimed at the base, not
+# drafts, green and not conflicting with main, other than EXCLUDE.
+ready_others() {
+  gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | [.number, (.draft | tostring), .head.sha, .base.ref] | @tsv' 2>/dev/null \
+    | while IFS="$tab" read -r r_num r_draft r_sha r_base; do
+      [ -n "$r_num" ] && [ "$r_draft" = false ] && [ "$r_base" = "$base" ] || continue
+      case " $1 " in *" $r_num "*) continue ;; esac
+      [ "$(pr_rollup "$r_sha")" = green ] || continue
+      [ "$(mergeable_word "$(pr_field "$r_num" 5)")" != CONFLICTING ] || continue
+      printf '%s ' "$r_num"
+    done
+}
+
 if [ "$mode" = serial ]; then
+  # The rule lives here, not only in a hook on the command line: a script
+  # that wraps the queue hides the call from the hook. Run by a drain or a
+  # batch, the choice was already made.
+  if [ -z "$QUEUE_IN_DRAIN" ] && [ -z "$because" ]; then
+    why=$(serial_refusal "$(ready_others "$(printf '%s ' $prs)")" "$because")
+    if [ -n "$why" ]; then say "Refused --serial: $why"; exit 2; fi
+  fi
+  [ -n "$because" ] || { [ -n "$QUEUE_IN_DRAIN" ] && because=drain; }
   for pr in $prs; do serial_one "$pr"; done
   [ -n "$QUEUE_IN_DRAIN" ] || echo "queue done"
   exit 0
@@ -689,6 +762,7 @@ done
 
 if [ -z "$carried" ]; then
   echo "Nothing survived the batch; running the serial queue for all of them."
+  because="dropped from batch"
   for pr in $dropped; do serial_one "$pr"; done
   exit 0
 fi
@@ -700,11 +774,21 @@ if [ -f "$wt/status/build.sh" ]; then
   fi
 fi
 
+# An earlier batch pull request still open is superseded by this one; close
+# it with a comment rather than leave it next to the new one.
+close_pr() { # NUMBER REASON
+  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$2" >/dev/null 2>&1 || true
+  gh api -X PATCH "repos/{owner}/{repo}/pulls/$1" -f state=closed >/dev/null 2>&1 && echo "closed batch PR #$1: $2"
+}
+gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null \
+  | while read -r old; do [ -n "$old" ] && close_pr "$old" "Superseded by a new batch from the queue; its members are carried there if still green."; done
+
 git -C "$wt" push -q -u origin "$branch"
 body=$(batch_pr_body "$carried" "$refs")
 batch_pr=$(gh api -X POST "repos/{owner}/{repo}/pulls" -f base="$base" -f head="$branch" -f title="Batch $day: $(printf '%s' "$carried" | wc -l | tr -d ' ') pull requests" -f body="$body" --jq .number 2>"$gh_err") || { rate_stop; echo "Could not open the batch pull request: $(head -n 1 "$gh_err" 2>/dev/null). The branch $branch is pushed; open it by hand or run the batch again."; exit 1; }
 echo "batch PR #$batch_pr opened; waiting for the one full CI run"
 if ! wait_for_run "$batch_pr" "$branch"; then
+  close_pr "$batch_pr" "The batch's CI run was not green, so nothing merged; closed so the next batch starts clean. The member pull requests are untouched."
   echo "The batch run is not green; nothing merged. Fix it on $branch or drop a PR and run again."
   exit 1
 fi
@@ -718,5 +802,6 @@ done
 
 if [ -n "$dropped" ]; then
   echo "serial queue for the dropped PRs:$dropped"
+  because="dropped from batch"
   for pr in $dropped; do serial_one "$pr"; done
 fi

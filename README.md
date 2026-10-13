@@ -9,9 +9,9 @@
 A Claude Code plugin for projects where many coding agents work at once.</p>
 
 <p align="center">
-  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.9.1" src="https://img.shields.io/badge/version-0.9.1-110F17?labelColor=110F17&color=FFB347"></a>
+  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.9.2" src="https://img.shields.io/badge/version-0.9.2-110F17?labelColor=110F17&color=FFB347"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-110F17?labelColor=110F17&color=FF6EC7"></a>
-  <a href="#tests"><img alt="621 tests" src="https://img.shields.io/badge/tests-621%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
+  <a href="#tests"><img alt="644 tests" src="https://img.shields.io/badge/tests-644%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
   <a href="https://bitblitzin.com/bootstrap"><img alt="bitblitzin.com/bootstrap" src="https://img.shields.io/badge/site-bitblitzin.com%2Fbootstrap-110F17?labelColor=110F17&color=A8E36B"></a>
 </p>
 
@@ -240,6 +240,7 @@ All of them live in `templates/` and are meant to be copied into the project roo
 - `scripts/pr-open.sh "TITLE" BODY_FILE` and `scripts/pr-checks.sh N`: open a pull request and read its checks through REST, so agents never reach for `gh pr create` or `gh pr checks`, which spend GraphQL points and trip its secondary limit first.
 - `.github/workflows/smoke.yml` and `scripts/ci/smoke.mjs`: after each production deploy, load the site's pages (`SMOKE_PATHS`) in a real browser and open the red-main issue on any console error or uncaught exception. Tests run code; only loading the pages shows a client that cannot start.
 - `scripts/deploy-setup.sh [PATH] [APP_ROOT] [INTERVAL]`, `.github/workflows/deploy.yml` and `scripts/ci/vercel-ignore.sh`: keep the host's build CPU down, which was nearly all of one owner's Vercel bill because every push to every branch was a build. Three paths, in order of preference. `runner`: the Deploy workflow builds on the project's own runner and deploys the output prebuilt, so Vercel builds nothing, on a schedule and only when main moved in something the app ships; when the runner is offline or the build fails, that run builds on Vercel instead. `vercel`: the same schedule, built on Vercel. `guard`: Git deploys from main only, with an ignore step that diffs from the last deployed commit (`VERCEL_GIT_PREVIOUS_SHA`, so a skipped build's changes ship with the next), skips changes that do not ship, and, when the Vercel project sets DEPLOY_INTERVAL_MINUTES, throttles to one build per interval (off by default, since a throttled build waits for the next push). The setup chooses the path from what the project has, writes `vercel.json` in the app's folder (keeping its other keys) and `.claude/deploy.json`; the sync offers it to a Vercel project with no guard or a hand-written one; the brief and the nightly audit say when the path is not keeping up; the console lists the Standard build machine and a spend cap, which have no API. The runner path is only ever a Linux or macOS runner: on Windows the build cannot write the output without Developer Mode, and with it Vercel rejects the upload. A private repository is assumed to have no hosted minutes (`DEPLOY_HOSTED` overrides), so the plan and the Vercel-built fallback run on the runner instead, and with neither the setup chooses the guard, which needs no workflow. Where the Deploy workflow's jobs run comes from the `DEPLOY_RUNNER` and `DEPLOY_JOBS_ON` repository variables, never from editing the file, and it needs neither jq nor a Windows shell. A project lists its own never-shipping folders as `neverShips` in `.claude/deploy.json` (`DEPLOY_NEVER_SHIPS` at setup).
+- `scripts/decisions.sh new | list | split`: decisions one file each in `docs/decisions/`, numbered by `next-number.sh` across main and every open pull request. A decisions table in the brief that every pull request appends a row to is a shared page: any two open together conflict on it, and one project's agents raced to write D124 before D123. `split` moves an existing table into files once and leaves a pointer.
 - `scripts/protect-main.sh`: branch protection on main in one call, the way the queue needs it. `scripts/supabase-create.sh NAME`: the app's Supabase project in one approved command; it generates the database password, writes it and the project reference into `.env` and nowhere else, and prints no secret. `scripts/env-lib.sh` holds the pure helpers both use.
 - `.gitattributes`: `CHANGELOG.md`, a file a tool writes, merges as a union so two releases that each append a line keep both. No hand-edited page gets that: the conflict is the one signal that two pull requests are appending to a shared page. One project gave `tasks.md` a union merge and reached 64 appends to one file in a week before anyone noticed; tasks are issues, and a spec tool's `tasks.md` is written once at planning and not touched again.
 - Nothing appended to pass a check. A pull request names its spec in its body (`Spec: specs/<feature>`) and changes the spec only when the design changed; `setup-paths.txt` lists only files whose change is a step a person takes (a migration, a variable, a container), not manifests or workflows; and the `!rerun-free` line in `classes.txt` names the classes (`docs`, `specs`, `status`) whose moves on main never cost a green pull request a re-run. Before this, three checks each rewarded appending a line to a shared file, and the queue then re-ran every green pull request for it, one at a time.
@@ -409,7 +410,7 @@ ok    no overlap merges
 ok    overlap reruns
 ok    ci on main reruns
 
-621 passed, 0 failed
+644 passed, 0 failed
 ```
 
 ## License, privacy and terms
