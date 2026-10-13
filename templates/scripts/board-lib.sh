@@ -67,9 +67,8 @@ board_set_field() {
 
 # issue_set_state_label ISSUE LABEL: add this state label, remove the others
 issue_set_state_label() {
-  remove=""
-  for l in $ALL_STATE_LABELS; do [ "$l" = "$2" ] || remove="$remove --remove-label $l"; done
-  gh issue edit "$1" --add-label "$2" $remove >/dev/null
+  isl_cur=$(gh api "repos/{owner}/{repo}/issues/$1/labels" --jq '.[].name' 2>/dev/null || true)
+  state_labels_json "$isl_cur" "$2" | gh api -X PUT "repos/{owner}/{repo}/issues/$1/labels" --input - >/dev/null
 }
 
 # board_apply ISSUE_NUMBER STATE_NAME CLOSED
@@ -82,10 +81,16 @@ board_apply() {
   ba_status=$(status_for "$ba_state" "$ba_closed")
   ba_state_opt=$(board_option "$BOARD_STATE_FIELD" "$ba_state")
   [ -n "$ba_state_opt" ] || { echo "The State field has no value \"$ba_state\"." >&2; return 1; }
+  # The label first: it is REST and lands under GitHub's GraphQL limit. The
+  # board after it; when GitHub refuses the board call, say the label is
+  # set and the board pending, which the nightly sync finishes.
+  issue_set_state_label "$ba_issue" "$ba_label"
   ba_url=$(gh api "repos/{owner}/{repo}/issues/$ba_issue" --jq .html_url)
   ba_item=$(board_item_for "$ba_url")
-  issue_set_state_label "$ba_issue" "$ba_label"
-  board_set_field "$ba_item" "$BOARD_STATE_FIELD" "$ba_state_opt"
+  if [ -z "$ba_item" ] || ! board_set_field "$ba_item" "$BOARD_STATE_FIELD" "$ba_state_opt"; then
+    echo "issue $ba_issue: $ba_label set; the board's State is pending (GitHub refused the board call). The nightly board sync sets it; nothing else to do."
+    return 0
+  fi
   if [ -n "$BOARD_STATUS_FIELD" ]; then
     ba_status_opt=$(board_option "$BOARD_STATUS_FIELD" "$ba_status")
     [ -n "$ba_status_opt" ] && board_set_field "$ba_item" "$BOARD_STATUS_FIELD" "$ba_status_opt"

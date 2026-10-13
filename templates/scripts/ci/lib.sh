@@ -32,6 +32,45 @@ EOF
   set +f
 }
 
+# state_labels_json CURRENT NEW
+# CURRENT is an issue's labels, one per line; NEW is its state label. Print
+# the JSON body that sets the labels to CURRENT without any other state
+# label, plus NEW: {"labels":["bug","state:ready"]}. One REST call sets it,
+# where gh issue edit goes through GraphQL and fails with the board under
+# GitHub's secondary limit.
+state_labels_json() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -v new="$2" '
+    function q(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return "\"" s "\"" }
+    NF && $0 !~ /^state:/ && !seen[$0]++ { out = out (out == "" ? "" : ",") q($0) }
+    END { if (new != "") out = out (out == "" ? "" : ",") q(new); print "{\"labels\":[" out "]}" }'
+}
+
+# checks_queued_only STATUSES
+# STATUSES is one check run status per line (queued, in_progress,
+# completed). Print "yes" when at least one is queued and none is running:
+# the run waits for a machine, not for its tests. "no" otherwise.
+checks_queued_only() {
+  printf '%s\n' "$1" | tr -d '\r' | tr 'A-Z' 'a-z' | awk '
+    /queued|waiting|pending|requested/ { q = 1 }
+    /in_progress/ { r = 1 }
+    END { print (q && !r) ? "yes" : "no" }'
+}
+
+# runner_stall QUEUED_ONLY ONLINE
+# QUEUED_ONLY is checks_queued_only for the pull requests the drain waits
+# on; ONLINE is how many self-hosted runners are online, or "unknown" when
+# they could not be read. Print "stop" when waiting is pointless (every
+# check queued, no runner online), "unknown" when it might be, nothing when
+# the wait is real. Three drains once waited twelve minutes each on runners
+# that had gone home for the night.
+runner_stall() {
+  [ "$1" = yes ] || return 0
+  case "$2" in
+    0) echo stop ;;
+    ''|unknown) echo unknown ;;
+  esac
+}
+
 # board_refusal TEXT
 # Print "yes" when gh's output means GitHub refused a board call for a
 # rate limit: the gh project commands print "unknown owner type" when

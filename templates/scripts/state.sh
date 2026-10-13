@@ -20,7 +20,7 @@ here=$(dirname "$0")
 # type"), say so in one line and let the nightly sync set the field.
 closed=$(gh api "repos/{owner}/{repo}/issues/$issue" --jq '.state == "closed"')
 if board_load "$project" "$owner" 2>"${TMPDIR:-/tmp}/state.$$.err"; then
-  board_apply "$issue" "$state" "$closed"
+  board_apply "$issue" "$state" "$closed" || echo "issue $issue: the label is set; the board's State is pending. The nightly board sync sets it."
 else
   issue_set_state_label "$issue" "$(label_from_state_name "$state")"
   if [ "$(board_refusal "$(cat "${TMPDIR:-/tmp}/state.$$.err" 2>/dev/null)")" = yes ]; then
