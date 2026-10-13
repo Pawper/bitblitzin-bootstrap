@@ -142,12 +142,18 @@ worktree_summary() {
       n++
       if (n == 1) next
       p = substr($0, 10); sub(/\/[^\/]*$/, "", p)
+      # Claude Code puts the worktrees of agents dispatched with
+      # isolation: worktree in .claude/worktrees inside the main checkout.
+      # That is a known place, not a stray folder.
+      if (p ~ /\/\.claude\/worktrees$/) { agent++; next }
       if (!(p in places)) { places[p] = 1; np++ }
     }
     END {
       extra = n - 1
       if (extra <= 0) exit
-      printf "Worktrees: %d besides the main checkout, in %d %s.", extra, np, (np == 1 ? "folder" : "folders")
+      printf "Worktrees: %d besides the main checkout, in %d %s", extra - agent, np, (np == 1 ? "folder" : "folders")
+      if (agent > 0) printf ", and %d made by Claude Code for dispatched agents in .claude/worktrees", agent
+      printf "."
       if (np > 1 || extra > 20) printf " Tidy with: sh scripts/worktrees.sh prune"
       printf "\n"
     }'

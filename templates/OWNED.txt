@@ -64,6 +64,9 @@ scripts/deploy-setup.sh
 feature smoke
 scripts/ci/smoke.mjs
 .github/workflows/smoke.yml
+feature decisions
+scripts/decisions.sh
+scripts/decisions-lib.sh
 feature supabase
 scripts/supabase-create.sh
 scripts/env-lib.sh

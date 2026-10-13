@@ -42,7 +42,7 @@ detached_worktrees() {
 # first: "312<TAB>C:/Users/me/Documents/GitHub".
 worktree_places() {
   printf '%s\n' "$1" | tr '\\' '/' | awk -F'\t' '
-    NF >= 1 && $1 != "" { p = $1; sub(/\/[^\/]*$/, "", p); c[p]++ }
+    NF >= 1 && $1 != "" { p = $1; sub(/\/[^\/]*$/, "", p); if (p ~ /\/\.claude\/worktrees$/) p = p " (Claude Code'"'"'s, for dispatched agents)"; c[p]++ }
     END { for (p in c) printf "%d\t%s\n", c[p], p }' | sort -rn
 }
 

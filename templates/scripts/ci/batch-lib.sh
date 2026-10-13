@@ -226,3 +226,58 @@ nearest_root() {
       if (substr(f, 1, length(r) + 1) == r "/" && length(r) > length(best)) { best = r; seen = 1 } }
     END { if (seen) print best }'
 }
+
+# serial_refusal READY BECAUSE
+# READY is the other open pull requests that are green and do not conflict
+# with main, space separated; BECAUSE is the reason given with --because.
+# Print why a serial merge is refused, or nothing when it may go: alone is
+# fine when nothing else is ready, and a named reason always is. One agent
+# hard-coded --serial into a landing script and copied it for every pull
+# request; five that were ready together each landed alone, with a full CI
+# run and a deploy apiece.
+serial_refusal() {
+  [ -z "$(printf '%s' "$2" | tr -d ' ')" ] || return 0
+  [ -n "$(printf '%s' "$1" | tr -d ' ')" ] || return 0
+  sr_n=$(printf '%s\n' $1 | wc -l | tr -d ' ')
+  sr_list=$(printf '#%s ' $1 | sed 's/ $//')
+  echo "$sr_n other green pull request(s) are ready to land with it ($sr_list); merge them together with --drain (or --batch), or give the reason this one must land alone: --serial N --because migration|conflict|must-land-alone|\"why\""
+}
+
+# serial_title TITLE NUMBER REASON
+# The squash commit title of a serial merge, carrying its reason, so the
+# nightly audit can read main's history: "Fix the chime (#79) [serial: alone]".
+serial_title() {
+  printf '%s (#%s) [serial: %s]\n' "$1" "$2" "${3:-alone}"
+}
+
+# serial_bursts LINES [WINDOW_SECONDS] [MAX]
+# LINES is main's recent first-parent history, "epoch<TAB>subject", one per
+# line. Print one line when more than MAX (default 2) serial merges landed
+# within WINDOW (default an hour): how many, their reasons, and what to do.
+# Nothing otherwise.
+serial_bursts() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v win="${2:-3600}" -v max="${3:-2}" '
+    $2 ~ /\[serial: [^]]*\]/ {
+      r = $2; sub(/.*\[serial: /, "", r); sub(/\].*/, "", r)
+      t[++n] = $1 + 0; why[n] = r
+    }
+    END {
+      # times arrive newest first from git log; sort ascending
+      for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (t[j] < t[i]) { x = t[i]; t[i] = t[j]; t[j] = x; y = why[i]; why[i] = why[j]; why[j] = y }
+      best = 0
+      for (i = 1; i <= n; i++) { k = 0; for (j = i; j <= n && t[j] - t[i] <= win; j++) k++; if (k > best) { best = k; bi = i } }
+      if (best <= max) exit
+      rs = ""; for (j = bi; j < bi + best; j++) rs = rs (rs == "" ? "" : ", ") why[j]
+      printf "Main took %d serial merges within an hour (reasons: %s). Pull requests that are ready together should land as one batch: sh scripts/ci/merge-queue.sh --drain.\n", best, rs
+    }'
+}
+
+# conflict_line FILES
+# FILES is the conflicting paths from git merge-tree, one per line. Print
+# the one line a serial run says for a pull request that conflicts with
+# main, instead of "updated" round after round.
+conflict_line() {
+  cl=$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | head -n 5 | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$cl" ]; then echo "conflicts with main in $cl; resolve it on the branch, then queue it again"
+  else echo "conflicts with main; resolve it on the branch, then queue it again"; fi
+}
