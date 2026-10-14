@@ -152,6 +152,9 @@ test('clashes: left-out pairs from the queue, and conflicts with main', () => {
   assert.ok(f.some((x) => (x.clashes || []).some((c) => c[1] === 'main')));
   assert.ok(f.some((x) => (x.clashes || []).some((c) => c[0] === 255 && c[1] === 252)));
   assert.ok(f.some((x) => x.open.some((p) => p.number === 255 && p.state === 'mainconflict')), 'once #252 lands, #255 conflicts with main');
+  const last = f[f.length - 1];
+  assert.equal(last.open.length, 0, 'the demo plays until nothing is open');
+  assert.deepEqual([251, 252, 253, 254, 255, 257].filter((n) => !last.main.some((m) => m.number === n)), [], 'every pull request lands');
 });
 
 test('the queue panel carries its data, safely', () => {

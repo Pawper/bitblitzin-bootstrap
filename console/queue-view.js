@@ -440,7 +440,8 @@ function renderQueue(state, opts) {
 </div>`;
 }
 
-// The scripted queue for demoPage. Six pull requests; four are green,
+// The scripted queue for demoPage, played until every pull request has
+// landed. Six pull requests; four are green,
 // #255 conflicts with #252 (pink: a clash with another pull request), and
 // #257 conflicts with main (red: never eligible until its owner fixes it). The batch takes the earliest and the most
 // that fit beside it, leaves #255 out and tells its owner which files;
@@ -460,12 +461,15 @@ function demoFrames() {
   const M255 = P(255, 'mainconflict', { conflict: 'PR #252 landed, so its date picker change is on main now and this one conflicts with main. Its owner was told when the batch formed.' });
   const landed = (ns) => ns.map((n) => ({ number: n, title: n > 250 ? `${t[n][0]} (#${n})` : `Earlier work (#${n})`, at: null }));
   const B = (done, total, state) => ({ number: 256, state, done, total, members: [251, 252, 254].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
-  const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name } : { pr, name, batch: pr === 256 });
+  const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name } : { pr, name, batch: pr === 256 || pr === 258 });
+  const B2 = (done, total, state) => ({ number: 258, state, done, total, members: [253, 255].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
   const R = (a, b, waiting) => ({ runners: [{ name: 'build-1', status: a ? 'busy' : 'idle', job: a ? J(...a) : null }, { name: 'build-2', status: b ? 'busy' : 'idle', job: b ? J(...b) : null }], waiting: waiting.map((w) => J(...w)), queued: waiting.length });
   // Every number a person reads is a pull request; say so.
   const prs = (text) => String(text).replace(/(^|[^R] )#(\d+)/g, '$1PR #$2').replace(/^#(\d+)/, 'PR #$1');
   const before = landed([250, 249, 248]);
   const after = landed([254, 252, 251, 250, 249, 248]);
+  const after2 = landed([255, 253, 254, 252, 251, 250]);
+  const after3 = landed([257, 255, 253, 254, 252, 251]);
   const frames = [
     { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green'), M257], batch: null, main: before, clashes: [[257, 'main']],
       ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. #257 conflicts with main, so it is not eligible for a batch at all.' },
@@ -484,6 +488,21 @@ function demoFrames() {
       ...R(['main', 'full'], null, []), note: 'All three land on main in one merge. #252 is on main now, so #255 conflicts with main: red, not pink.' },
     { open: [P(253, 'green'), P(255, 'pending'), M257], batch: null, main: after, clashes: [[257, 'main']],
       ...R([255, 'checks'], ['main', 'full'], [[255, 'app']]), note: '#255\'s owner merged main in and fixed the file; it is being tested again.' },
+    { open: [P(253, 'green'), P(255, 'green'), P(257, 'pending')], batch: null, main: after,
+      ...R([257, 'checks'], null, [[257, 'app']]), note: '#255 is green again. #257\'s owner merged main in too, so it is no longer red; it is being tested.' },
+    { open: [P(255, 'green', { checking: true }), P(257, 'pending')],
+      batch: { number: null, forming: true, state: 'none', done: 0, total: 0, members: [P(253, 'green', { anchor: true })] }, main: after,
+      ...R([257, 'app'], null, []), note: 'The next round: #253 is now the earliest green one, so it anchors the next batch, and #255 is test-merged against it.' },
+    { open: [P(257, 'pending')], batch: B2(0, 3, 'pending'), main: after,
+      ...R([257, 'app'], [258, 'checks'], [[258, 'app']]), note: 'They fit, so batch #258 tests #253 and #255 together. #257 is not green yet, so it waits for the next round.' },
+    { open: [P(257, 'green')], batch: B2(2, 3, 'pending'), main: after,
+      ...R([258, 'app'], [258, 'CI passed'], []), note: '#257 is green now, but the batch already started; it does not jump in.' },
+    { open: [P(257, 'green')], batch: B2(3, 3, 'green'), main: after,
+      ...R(null, null, []), note: 'Batch #258 is green.' },
+    { open: [P(257, 'green')], batch: null, main: after2,
+      ...R(['main', 'full'], null, []), note: '#253 and #255 land together. One green pull request is left; a batch of one would only add a run.' },
+    { open: [], batch: null, main: after3,
+      ...R(['main', 'full'], null, []), note: '#257 merges on its own, since main is green and it merges cleanly. Every open pull request has landed: two batches and one on its own.' },
   ];
   return frames.map((f) => ({ ...f, note: prs(f.note), open: f.open.map((o) => (o.conflict ? { ...o, conflict: prs(o.conflict) } : o)) }));
 }
