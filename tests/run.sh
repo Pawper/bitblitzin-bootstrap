@@ -900,7 +900,17 @@ eq "split keeps the rest of the brief" "1" "$(sed -n 4p "$dd.out")"
 eq "split numbers decisions by file" "decision docs/decisions/*.md" "$(sed -n 5p "$dd.out")"
 eq "list reads them back" "| D2 | 2026-10-02 | Second thing. |" "$(sed -n 6p "$dd.out")"
 
-printf '\n# when a green pull request needs a second run\n'
+printf '\n# batches and the drain, sharing pull requests\n'
+eq "a batch body's members" "303
+305" "$(batch_members "$(batch_pr_body "$(printf '303\tAI fill\n305\tHighlights\n')")")"
+eq "the drain drops an open batch's members" "301	false	sha	main" "$(drop_members "$(printf '301\tfalse\tsha\tmain\n303\tfalse\tsha\tmain\n305\tfalse\tsha\tmain')" '303 305')"
+eq "and the batch itself" "" "$(drop_members "$(printf '306\tfalse\tsha\tmain')" '303 305 306')"
+eq "no batch open, nothing dropped" "301	false	sha	main" "$(drop_members "$(printf '301\tfalse\tsha\tmain')" '')"
+eq "jobs waiting on machines are said with a rough time" "6 job(s) queued, 2 of 2 runner(s) busy; about 12 minute(s) at one job per runner. Waiting on machines, not on a failure." "$(queue_eta 6 2 2 4)"
+eq "queued with no runner online" "3 job(s) queued and no runner online." "$(queue_eta 3 0 0)"
+eq "nothing queued, nothing said" "" "$(queue_eta 0 2 2)"
+
+printf '\n# when a green pull request needs a second run\n\'
 eq "main moved outside its classes: merge" "merge" "$(rerun_decision no red)"
 eq "main moved in its classes and main is green: merge, main's run is the gate" "merge" "$(rerun_decision yes green)"
 eq "main is red: re-run" "update" "$(rerun_decision yes red)"

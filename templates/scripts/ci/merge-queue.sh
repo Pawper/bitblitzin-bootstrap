@@ -353,6 +353,14 @@ wait_for_run() {
       echo "Waited $wait_minutes minutes for run $run_id; giving up for now. Run the queue again later."
       return 3
     fi
+    # Waiting on machines or on tests? Every two minutes, say how many jobs
+    # are queued and how busy the runners are.
+    w_tick=$(( ${w_tick:-0} + 1 ))
+    if [ $(( w_tick % 4 )) -eq 0 ]; then
+      jq_counts=$(gh api "repos/{owner}/{repo}/actions/runs/$run_id/jobs?per_page=100" --jq '[.jobs[] | select(.status == "queued")] | length' 2>/dev/null || echo 0)
+      rinfo=$(GH_TOKEN="${ADMIN_TOKEN:-${GH_TOKEN:-}}" gh api 'repos/{owner}/{repo}/actions/runners' --jq '"\([.runners[] | select(.status == "online")] | length)\t\([.runners[] | select(.busy)] | length)"' 2>/dev/null || true)
+      [ -n "$rinfo" ] && queue_eta "$jq_counts" "${rinfo#*	}" "${rinfo%%	*}" "${QUEUE_JOB_MINUTES:-4}"
+    fi
     # A run still queued after five minutes with no runner online will not
     # start: say so and stop rather than wait out the hour.
     case "$run" in
@@ -539,7 +547,7 @@ typecheck_ok() {
 # "failed CI twice" comes with its cause instead of three more calls.
 why_red() {
   wr_sha=$(pr_field "$1" 2)
-  wr_jobs=$(gh api "repos/{owner}/{repo}/commits/$wr_sha/check-runs?per_page=100" --jq '.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "\(.name)\t\(.id)"' 2>/dev/null || true)
+  wr_jobs=$(gh api "repos/{owner}/{repo}/commits/$wr_sha/check-runs?per_page=100" --jq '.check_runs[] | select(.conclusion == "failure" or .conclusion == "startup_failure" or .conclusion == "action_required" or .conclusion == "timed_out") | "\(.name)\t\(.id)"' 2>/dev/null || true)
   [ -n "$wr_jobs" ] || { echo "    (no failing check run on its head commit now; it may have gone green since)"; return 0; }
   printf '%s\n' "$wr_jobs" | while IFS="$tab" read -r wr_name wr_id; do
     [ -n "$wr_name" ] || continue
@@ -592,6 +600,32 @@ if [ "$mode" = drain ]; then
       say "Listing the open pull requests failed (${l_err:-no detail}); trying again in 60 seconds."
       sleep 60
     done
+    # Open batches: their members are theirs, not the drain's. A batch one of
+    # whose members has landed on its own no longer matches main; close it.
+    members=""
+    for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null); do
+      bm=$(batch_members "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq '.body // ""' 2>/dev/null)")
+      landed=""
+      for m in $bm; do [ "$(gh api "repos/{owner}/{repo}/pulls/$m" --jq '.merged' 2>/dev/null)" = true ] && landed="$landed #$m"; done
+      # Only one queue runs and a batch finishes within its round, so an
+      # open batch here was left by an earlier run. Settle it.
+      bstate=$(required_on "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq .head.sha 2>/dev/null)")
+      if [ -n "$landed" ]; then
+        gh api -X POST "repos/{owner}/{repo}/issues/$bp/comments" -f body="Closed by the queue: member(s)$landed landed on their own, so this batch no longer matches main. The rest are queued again on their own." >/dev/null 2>&1 || true
+        gh api -X PATCH "repos/{owner}/{repo}/pulls/$bp" -f state=closed >/dev/null 2>&1 && say "round $round: closed batch #$bp, since$landed landed on their own."
+      elif [ "$bstate" = passed ] && bsha=$(gh api -X PUT "repos/{owner}/{repo}/pulls/$bp/merge" -f merge_method=merge --jq .sha 2>/dev/null); then
+        say "round $round: merged batch #$bp, left green by an earlier run (members:$(printf ' #%s' $bm))."
+        for m in $bm; do gh api -X POST "repos/{owner}/{repo}/issues/$m/comments" -f body="Merged into $base in batch #$bp (commit $bsha), with its history kept. GitHub may show this pull request as closed rather than merged; its changes are on $base." >/dev/null 2>&1 || true; done
+      elif [ "$bstate" = failed ]; then
+        gh api -X POST "repos/{owner}/{repo}/issues/$bp/comments" -f body="Closed by the queue: left open by an earlier run with its required check failed. Its members are queued again on their own." >/dev/null 2>&1 || true
+        gh api -X PATCH "repos/{owner}/{repo}/pulls/$bp" -f state=closed >/dev/null 2>&1 && say "round $round: closed batch #$bp, whose required check failed; its members are queued again."
+      else
+        # Still running: its members wait with it rather than race it.
+        members="$members $bm $bp"
+        say "round $round: batch #$bp is still running CI; its members$(printf ' #%s' $bm) wait for it."
+      fi
+    done
+    listed=$(drop_members "$listed" "$members")
     open=$(printf '%s\n' "$listed" | while IFS="$tab" read -r o_num o_draft o_sha o_base; do
       [ -n "$o_num" ] || continue
       printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$(mergeable_word "$(pr_field "$o_num" 5)")" "$(pr_rollup "$o_sha")" "$o_base"
@@ -682,9 +716,25 @@ if [ "$mode" = drain ]; then
       gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what the drain merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
     else say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."; fi
   fi
+  # Re-read each one before calling it a failure: a pull request red
+  # earlier in the drain may be green, or only cancelled, by now.
+  still=""
   if [ -n "$attention" ]; then
+    rm -f "$flaky_dir/pr-"*.tsv 2>/dev/null
+    still=$(printf '%s\n' "$attention" | while IFS="$tab" read -r a_num a_why; do
+      [ -n "$a_num" ] || continue
+      case "$a_why" in
+        *"failed CI twice"*)
+          now=$(pr_rollup "$(pr_field "$a_num" 2)")
+          if [ "$now" = red ]; then printf '%s\t%s\n' "$a_num" "$a_why"
+          else say "  #$a_num was red earlier in this drain and is $now now; not a failure."; fi ;;
+        *) printf '%s\t%s\n' "$a_num" "$a_why" ;;
+      esac
+    done)
+  fi
+  if [ -n "$still" ]; then
     say "Needs attention:"
-    printf '%s\n' "$attention" | while IFS="$tab" read -r a_num a_why; do
+    printf '%s\n' "$still" | while IFS="$tab" read -r a_num a_why; do
       [ -n "$a_num" ] || continue
       say "  #$a_num $a_why"
       case "$a_why" in *"failed CI twice"*) why_red "$a_num" | tee -a "$log_file" ;; esac
@@ -832,8 +882,16 @@ for pr in $prs; do
     continue
   fi
   # Cancel the PR's own CI run; the batch's one run covers it.
-  gh run list --branch "$(pr_field "$pr" 1)" --status in_progress --json databaseId -q '.[].databaseId' 2>/dev/null \
-    | while read -r id; do [ -n "$id" ] && gh run cancel "$id" >/dev/null 2>&1 || true; done
+  # Queued runs too: a queued member run still takes a runner the moment
+  # one frees, ahead of the batch. A run that ignores the cancel (jobs
+  # already picked up) is force-cancelled.
+  gh run list --branch "$(pr_field "$pr" 1)" --json databaseId,status -q '.[] | select(.status != "completed") | .databaseId' 2>/dev/null \
+    | while read -r id; do
+      [ -n "$id" ] || continue
+      gh run cancel "$id" >/dev/null 2>&1 || true
+      sleep 5
+      [ "$(gh api "repos/{owner}/{repo}/actions/runs/$id" --jq .status 2>/dev/null)" = completed ] || gh api -X POST "repos/{owner}/{repo}/actions/runs/$id/force-cancel" >/dev/null 2>&1 || true
+    done
   good=$(git -C "$wt" rev-parse HEAD)
   carried="$carried$pr	$title
 "
