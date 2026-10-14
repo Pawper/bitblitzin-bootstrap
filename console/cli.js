@@ -4,6 +4,8 @@
 //
 // console        serve the owner console for the project in the current folder
 // console --check  do not serve; fail when the config has gaps (used by CI and tests)
+// console --no-delivery  leave out the Delivery section (no GitHub reads)
+// queue-demo [--out FILE]  write the self-playing merge queue page, for a site
 
 const path = require('path');
 const fs = require('fs');
@@ -14,21 +16,26 @@ function usage() {
   process.stdout.write(`Usage:
   bitblitzin-bootstrap console [--port 7777] [--root <project>]
   bitblitzin-bootstrap console --check [--root <project>]
+  bitblitzin-bootstrap queue-demo [--out <file>]
 
 Serves the owner console for the project at <project> (default: the current
 folder) on localhost. --check reads the config and the example env file and
 fails when a setting has no card, a required question is missing, or a link
-does not resolve.
+does not resolve. --no-delivery leaves out the Delivery section, which
+reads the project's CI runs and pull requests from GitHub. queue-demo
+writes one page that plays a scripted merge queue.
 `);
 }
 
 function parseArgs(argv) {
-  const out = { command: argv[0], port: 7777, root: process.cwd(), check: false };
+  const out = { command: argv[0], port: 7777, root: process.cwd(), check: false, delivery: true, out: null };
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--port') out.port = Number(argv[++i]);
     else if (a === '--root') out.root = path.resolve(argv[++i]);
     else if (a === '--check') out.check = true;
+    else if (a === '--no-delivery') out.delivery = false;
+    else if (a === '--out') out.out = argv[++i];
     else if (a === '--help' || a === '-h') out.command = 'help';
   }
   return out;
@@ -50,6 +57,11 @@ function check(root) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.command === 'queue-demo') {
+    const page = require('./queue-view').demoPage();
+    if (args.out) { fs.writeFileSync(args.out, page); process.stdout.write(`Wrote ${args.out}\n`); } else process.stdout.write(page);
+    return;
+  }
   if (args.command !== 'console') { usage(); process.exit(args.command === 'help' ? 0 : 2); }
   if (args.check) {
     const problems = check(args.root);
@@ -61,7 +73,7 @@ async function main() {
     return;
   }
   config.loadConfig(args.root);
-  const { url } = await serve({ root: args.root, port: args.port });
+  const { url } = await serve({ root: args.root, port: args.port, delivery: args.delivery });
   process.stdout.write(`Owner console for ${args.root}\n${url}\nPress Ctrl+C to stop.\n`);
 }
 

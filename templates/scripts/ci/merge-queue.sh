@@ -470,6 +470,7 @@ serial_one() {
     files=$(git merge-tree --write-tree --name-only origin/"$base" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
     if [ "$(mergeable_word "$(pr_field "$pr" 5)")" = CONFLICTING ] || [ -n "$files" ]; then
       batch_line "$pr" "not merged" "$(conflict_line "$files")"
+      notify_conflict "$pr" "$files" main
       return 0
     fi
   fi
@@ -604,7 +605,7 @@ if [ "$mode" = drain ]; then
     done
     # Open batches: their members are theirs, not the drain's. A batch one of
     # whose members has landed on its own no longer matches main; close it.
-    members=""
+    members=""; settled=""
     for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null); do
       bm=$(batch_members "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq '.body // ""' 2>/dev/null)")
       landed=""
@@ -615,19 +616,22 @@ if [ "$mode" = drain ]; then
       if [ -n "$landed" ]; then
         gh api -X POST "repos/{owner}/{repo}/issues/$bp/comments" -f body="Closed by the queue: member(s)$landed landed on their own, so this batch no longer matches main. The rest are queued again on their own." >/dev/null 2>&1 || true
         gh api -X PATCH "repos/{owner}/{repo}/pulls/$bp" -f state=closed >/dev/null 2>&1 && say "round $round: closed batch #$bp, since$landed landed on their own."
+        settled="$settled $bp $(printf '%s' "$landed" | tr -d '#')"
       elif [ "$bstate" = passed ] && bsha=$(gh api -X PUT "repos/{owner}/{repo}/pulls/$bp/merge" -f merge_method=merge --jq .sha 2>/dev/null); then
         say "round $round: merged batch #$bp, left green by an earlier run (members:$(printf ' #%s' $bm))."
+        settled="$settled $bp $bm"
         for m in $bm; do gh api -X POST "repos/{owner}/{repo}/issues/$m/comments" -f body="Merged into $base in batch #$bp (commit $bsha), with its history kept. GitHub may show this pull request as closed rather than merged; its changes are on $base." >/dev/null 2>&1 || true; done
       elif [ "$bstate" = failed ]; then
         gh api -X POST "repos/{owner}/{repo}/issues/$bp/comments" -f body="Closed by the queue: left open by an earlier run with its required check failed. Its members are queued again on their own." >/dev/null 2>&1 || true
         gh api -X PATCH "repos/{owner}/{repo}/pulls/$bp" -f state=closed >/dev/null 2>&1 && say "round $round: closed batch #$bp, whose required check failed; its members are queued again."
+        settled="$settled $bp"
       else
         # Still running: its members wait with it rather than race it.
         members="$members $bm $bp"
         say "round $round: batch #$bp is still running CI; its members$(printf ' #%s' $bm) wait for it."
       fi
     done
-    listed=$(drop_members "$listed" "$members")
+    listed=$(drop_members "$listed" "$members $settled")
     open=$(printf '%s\n' "$listed" | while IFS="$tab" read -r o_num o_draft o_sha o_base; do
       [ -n "$o_num" ] || continue
       printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$(mergeable_word "$(pr_field "$o_num" 5)")" "$(pr_rollup "$o_sha")" "$o_base"
@@ -746,6 +750,20 @@ if [ "$mode" = drain ]; then
   exit 0
 fi
 
+# notify_conflict PR FILES WITH: comment on the pull request and label it
+# state:blocked, once per head commit, so the owning agent finds the
+# conflict on its next session instead of it waiting until someone looks.
+notify_conflict() {
+  nc_sha=$(pr_field "$1" 2)
+  nc_seen="$flaky_dir/noticed"
+  grep -qx "$1 $nc_sha" "$nc_seen" 2>/dev/null && return 0
+  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$(conflict_notice "$2" "$3")" >/dev/null 2>&1 || return 0
+  nc_cur=$(gh api "repos/{owner}/{repo}/issues/$1/labels" --jq '.[].name' 2>/dev/null || true)
+  state_labels_json "$nc_cur" "state:blocked" | gh api -X PUT "repos/{owner}/{repo}/issues/$1/labels" --input - >/dev/null 2>&1 || true
+  echo "$1 $nc_sha" >> "$nc_seen"
+  say "  #$1: commented with the conflicting files and labeled it state:blocked."
+}
+
 # ready_others EXCLUDE: the open pull requests aimed at the base, not
 # drafts, green and not conflicting with main, other than EXCLUDE.
 ready_others() {
@@ -838,7 +856,44 @@ carried=""
 refs=""
 dropped=""
 good=$(git -C "$wt" rev-parse HEAD)
+
+# Which pull requests go in. The earliest always does; of the rest, the
+# largest set that conflicts with nothing already in, read pair by pair
+# with git merge-tree, which merges in memory and touches no files. A
+# pull request left out conflicts with one that lands now, so it will
+# conflict with main: its owner is told now, with the files.
+for pr in $prs; do git -C "$wt" fetch -q origin "+refs/pull/$pr/head:refs/queue/pr-$pr" 2>/dev/null || true; done
+# The owner console reads this line to show which pull requests are being
+# test-merged; it is cleared when the pairing ends.
+printf 'checking %s\n' "$(printf '%s ' $prs | sed 's/ $//')" > "$flaky_dir/now" 2>/dev/null || true
+pairs=""
+for a in $prs; do for b in $prs; do
+  [ "$a" -lt "$b" ] || continue
+  git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1 || pairs="$pairs
+$a $b"
+done; done
+: > "$flaky_dir/now" 2>/dev/null || true
+: > "$flaky_dir/clashes" 2>/dev/null || true
+if [ -n "$pairs" ]; then
+  group=$(anchored_group "$(printf '%s ' $prs)" "$pairs" | tr '\n' ' ')
+  for pr in $prs; do
+    case " $group " in *" $pr "*) continue ;; esac
+    with=$(printf '%s\n' "$pairs" | awk -v p="$pr" -v g=" $group " '$1 == p && index(g, " " $2 " ") { print $2; exit } $2 == p && index(g, " " $1 " ") { print $1; exit }')
+    files=$(git -C "$wt" merge-tree --write-tree --name-only "refs/queue/pr-$pr" "refs/queue/pr-$with" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    batch_line "$pr" "left for later" "conflicts with #$with, which goes in this batch"
+    printf '%s %s\n' "$pr" "$with" >> "$flaky_dir/clashes" 2>/dev/null || true
+    notify_conflict "$pr" "$files" "$with"
+  done
+  prs=$group
+fi
 for pr in $prs; do
+  # Read fresh, not from the cache: a pull request merged or closed since
+  # the list was made has nothing left to merge.
+  pst=$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq '"\(.state) \(.merged)"' 2>/dev/null || true)
+  case "$pst" in
+    "closed true") batch_line "$pr" "skipped" "already merged"; continue ;;
+    closed*) batch_line "$pr" "skipped" "closed"; continue ;;
+  esac
   why=$(folder_blocks "$pr"); [ -n "$why" ] || why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; continue; fi
   git -C "$wt" fetch -q origin "pull/$pr/head" || { batch_line "$pr" "dropped" "could not fetch it"; dropped="$dropped $pr"; continue; }
@@ -849,6 +904,7 @@ for pr in $prs; do
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
     git -C "$wt" reset -q --hard "$good"
     batch_line "$pr" "dropped" "conflicts with the batch so far"
+    notify_conflict "$pr" "$(git -C "$wt" merge-tree --write-tree --name-only "$good" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')" main
     dropped="$dropped $pr"
     continue
   fi

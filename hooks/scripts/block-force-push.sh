@@ -3,6 +3,7 @@
 # The rule it enforces: never force-push; history on a shared branch stays.
 here=$(dirname "$0")
 . "$here/lib.sh"
+. "$here/refusal-log.sh"
 
 input=$(cat)
 cmd=$(json_field "$input" command)

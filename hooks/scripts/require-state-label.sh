@@ -4,6 +4,7 @@
 # filed, so the board and the audits can trust the label.
 here=$(dirname "$0")
 . "$here/lib.sh"
+. "$here/refusal-log.sh"
 
 input=$(cat)
 cmd=$(json_field "$input" command)

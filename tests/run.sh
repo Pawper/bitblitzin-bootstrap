@@ -910,6 +910,16 @@ eq "jobs waiting on machines are said with a rough time" "6 job(s) queued, 2 of 
 eq "queued with no runner online" "3 job(s) queued and no runner online." "$(queue_eta 3 0 0)"
 eq "nothing queued, nothing said" "" "$(queue_eta 0 2 2)"
 
+printf '\n# a batch anchored on the earliest pull request\n'
+eq "no conflicts, everyone in" "251 252 253" "$(anchored_group '251 252 253' '' | tr '\n' ' ' | sed 's/ $//')"
+eq "the earliest stays in, its conflicts go" "251 254" "$(anchored_group '251 252 253 254' "$(printf '251 252\n251 253')" | tr '\n' ' ' | sed 's/ $//')"
+eq "the largest set beside the earliest, not the first that fits" "251 253 254" "$(anchored_group '251 252 253 254' "$(printf '252 253\n252 254')" | tr '\n' ' ' | sed 's/ $//')"
+eq "on a tie, the earlier one" "251 252" "$(anchored_group '251 252 253' "$(printf '252 253')" | tr '\n' ' ' | sed 's/ $//')"
+eq "one pull request is its own batch" "251" "$(anchored_group '251' '')"
+eq "the notice names the files and the fix" "yes" "$(conflict_notice "$(printf 'src/cart.ts\nsrc/a.ts')" 252 | grep -q '#252, which goes into this batch first in:' && conflict_notice 'src/cart.ts' main | grep -q 'Never rebase or force-push' && echo yes)"
+eq "conflicts are noticed once per head commit" "1" "$(grep -cF 'grep -qx "$1 $nc_sha" "$nc_seen"' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the queue notices in all three places" "3" "$(grep -c '^ *notify_conflict "\$pr"' "$root/templates/scripts/ci/merge-queue.sh")"
+
 printf '\n# when a green pull request needs a second run\n\'
 eq "main moved outside its classes: merge" "merge" "$(rerun_decision no red)"
 eq "main moved in its classes and main is green: merge, main's run is the gate" "merge" "$(rerun_decision yes green)"
@@ -1188,8 +1198,13 @@ eq "the env check still runs" "1" "$(printf '%s\n' "$ciy" | grep -c 'client-env-
 printf '\n# set -e never swallows a return code\n'
 eq "no bare msg=\$(f); code=\$? in the queue" "0" "$(grep -c '=\$([^)]*); *code=\$?' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a pending run says it is waiting, in both waits" "2" "$(grep -cF 'code=0; msg=$(diagnose "$run_id") || code=$?' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the drain drops what settling merged or closed" "1" "$(grep -c 'drop_members "$listed" "$members $settled"' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "a batch skips a pull request already merged" "1" "$(grep -c '"skipped" "already merged"' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "settled batch and its members leave the list" "301	false	sha	main" "$(drop_members "$(printf '301\tfalse\tsha\tmain\n320\tfalse\tsha\tmain\n328\tfalse\tsha\tmain')" ' 328 320')"
 eq "a batch of one merges serially" "1" "$(grep -c 'merging it serially instead of opening a batch of one' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "worktrees.sh never stops without a word" "1" "$(grep -c 'stopped with exit \$rc at' "$root/templates/scripts/worktrees.sh")"
+eq "no loop in worktrees.sh ends on a bare test" "0" "$(grep -c '^ *\[ [^]]*\] && printf' "$root/templates/scripts/worktrees.sh")"
+eq "close says a pull request was already closed" "1" "$(grep -c 'was already closed; added the reason' "$root/templates/scripts/worktrees.sh")"
 eq "close reads and closes over REST" "0" "$(grep -c 'gh pr view\|gh pr close' "$root/templates/scripts/worktrees.sh")"
 
 printf '\n# runner watch\n'

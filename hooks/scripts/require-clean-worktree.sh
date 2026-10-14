@@ -12,6 +12,7 @@
 # the second stop goes through, so a session can never be trapped.
 here=$(dirname "$0")
 . "$here/lib.sh"
+. "$here/refusal-log.sh"
 . "$here/worktree-lib.sh"
 
 input=$(cat)
