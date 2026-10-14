@@ -19,7 +19,7 @@ const QUEUE_CSS = `
   --mq-line: #3a423b; --mq-green: #4ade9a; --mq-amber: #e8b04b; --mq-red: #f06292; --mq-grey: #7c847e; --mq-cyan: #38c8f0;
   position: relative; background: linear-gradient(180deg, var(--mq-panel), var(--mq-bg)); color: var(--mq-ink);
   border: 1px solid var(--mq-line); border-radius: 22px; padding: 18px 18px 22px; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  max-width: 520px; overflow: visible; }
+  width: 100%; max-width: 520px; box-sizing: border-box; overflow: visible; }
 .mq-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
 .mq-title { letter-spacing: .18em; font-size: 12px; color: var(--mq-soft); display: flex; align-items: center; gap: 8px; text-transform: uppercase; }
 .mq-title::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--mq-green); box-shadow: 0 0 8px var(--mq-green); }
@@ -51,6 +51,7 @@ const QUEUE_CSS = `
 .mq-chip::before { content: ""; position: absolute; inset: -2px; border-radius: 12px; padding: 2px; opacity: 0; transition: opacity .4s ease; pointer-events: none;
   background: conic-gradient(from var(--mq-a), transparent 0 62%, rgba(255,255,255,.9) 76%, var(--mq-cyan) 84%, transparent 96%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.mq-box.forming { border-style: dashed; }
 .mq-chip.checking::before { opacity: 1; animation: mq-gleam 1.4s linear infinite; }
 @keyframes mq-gleam { to { --mq-a: 360deg; } }
 .mq-tip { position: absolute; z-index: 5; pointer-events: none; min-width: 200px; max-width: 280px; background: #0f1113; color: var(--mq-ink);
@@ -64,13 +65,13 @@ const QUEUE_CSS = `
 .mq-runners-head .q { letter-spacing: 0; text-transform: none; font-size: 12px; }
 .mq-runners-head .q.many { color: var(--mq-amber); }
 .mq-lanes { display: grid; gap: 6px; }
-.mq-wait { position: relative; display: flex; flex-wrap: wrap; gap: 6px; min-height: 42px; padding: 8px; border: 1px dashed var(--mq-line); border-radius: 10px; margin-bottom: 12px; align-items: center; align-content: center; }
+.mq-wait { position: relative; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; min-height: 42px; padding: 8px; border: 1px dashed var(--mq-line); border-radius: 10px; margin-bottom: 12px; align-items: center; align-content: center; }
 .mq-wait-none { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--mq-soft); font-size: 12px; pointer-events: none; transition: opacity .3s ease; }
 .mq-wjob.leaving { position: absolute; transition: opacity .4s ease; }
 .mq-wjob { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mq-soft); transition: transform .9s cubic-bezier(.3,.7,.2,1), opacity .4s ease; }
 .mq-wjob em { font-style: normal; }
 .lanes-head { margin-top: 2px; }
-.mq-lane { display: grid; grid-template-columns: 10px minmax(70px, 1fr) 2fr; align-items: center; gap: 10px; background: var(--mq-chip); border: 1px solid #2c3036;
+.mq-lane { display: grid; grid-template-columns: 10px minmax(70px, 1fr) minmax(0, 2fr); align-items: center; gap: 10px; background: var(--mq-chip); border: 1px solid #2c3036;
   border-radius: 10px; padding: 7px 12px; font-size: 12px; transition: border-color .4s ease, box-shadow .4s ease; }
 .mq-lane .ld { width: 8px; height: 8px; border-radius: 50%; background: var(--mq-grey); }
 .mq-lane { --lane: var(--mq-cyan); border-left: 3px solid var(--lane); }
@@ -152,7 +153,8 @@ const QUEUE_JS = `
   };
   MQ.prototype.showTip = function (el) {
     var pr = el._pr || {}, t = this.tip, lines = [];
-    var st = pr.where === 'batch' ? 'In the batch; ' + (STATE_WORDS[pr.state] || pr.state) : (STATE_WORDS[pr.state] || pr.state);
+    var st = pr.anchor ? 'The earliest green pull request, so it anchors the batch; the others are test-merged against it.'
+      : pr.where === 'batch' ? 'In the batch; ' + (STATE_WORDS[pr.state] || pr.state) : (STATE_WORDS[pr.state] || pr.state);
     t.innerHTML = '';
     var b = document.createElement('b'); b.textContent = '#' + pr.number + '  ' + (pr.title || ''); t.appendChild(b);
     if (pr.author) lines.push('by ' + pr.author + (pr.created ? ', opened ' + ago(pr.created) : ''));
@@ -193,7 +195,8 @@ const QUEUE_JS = `
     this.box.style.top = top + 'px'; this.box.style.height = (h - top - 4) + 'px';
     this.box.style.opacity = batch ? 1 : 0.4;
     this.empty.style.opacity = batch ? 0 : 1;
-    this.bar.style.opacity = batch ? 1 : 0;
+    this.bar.style.opacity = batch && !batch.forming ? 1 : 0;
+    this.box.classList.toggle('forming', !!(batch && batch.forming));
     var fill = batch && batch.total ? Math.round(100 * batch.done / batch.total) : 0;
     this.bar.querySelector('i').style.width = fill + '%';
     this.bar.className = 'mq-bar' + (batch && batch.state === 'red' ? ' red' : batch && batch.state === 'green' ? ' green' : '');
@@ -265,11 +268,9 @@ const QUEUE_JS = `
     Object.keys(keep).forEach(function (key) {
       if (want[key]) return;
       var el = keep[key], r = wasAt[key];
-      el.classList.add('leaving');
-      el.style.left = (r.left - wr.left) + 'px'; el.style.top = (r.top - wr.top) + 'px';
-      // a job a runner took is drawn by the lane's pill from here on
-      el.style.opacity = 0;
-      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 450);
+      // A job a runner took goes at once: the lane's pill flies from this
+      // spot, and the jobs behind it slide up without passing over it.
+      if (el.parentNode) el.parentNode.removeChild(el);
       delete keep[key];
     });
     var fresh = [];
@@ -364,9 +365,11 @@ function queueState(view) {
   const ready = view.open.filter((p) => p.state === 'green').length;
   if (ready) note.push(`${ready} green and waiting.`);
   if (!view.batch && !view.open.length) note.push('Nothing waiting.');
+  const checking = view.checking || [];
+  const anchor = !view.batch && checking.length ? checking[0] : null;
   return {
-    open: view.open.map((p) => ({ ...pick(p), checking: (view.checking || []).includes(p.number) })),
-    batch: view.batch ? { number: view.batch.number, state: view.batch.state, done: view.batch.done, total: view.batch.total, members: view.batch.members.map(pick) } : null,
+    open: view.open.filter((p) => p.number !== anchor).map((p) => ({ ...pick(p), checking: checking.includes(p.number) })),
+    batch: anchor ? { number: null, forming: true, state: 'none', done: 0, total: 0, members: view.open.filter((p) => p.number === anchor).map((p) => ({ ...pick(p), anchor: true })) } : view.batch ? { number: view.batch.number, state: view.batch.state, done: view.batch.done, total: view.batch.total, members: view.batch.members.map(pick) } : null,
     main: view.main,
     runners: view.runners || null,
     waiting: view.waiting || null,
@@ -419,8 +422,9 @@ function demoFrames() {
   return [
     { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green')], batch: null, main: before,
       ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. Jobs wait in one line for whichever runner frees first.' },
-    { open: [P(251, 'green', { checking: true }), P(252, 'green', { checking: true }), P(253, 'pending'), P(254, 'green', { checking: true }), P(255, 'green', { checking: true })], batch: null, main: before,
-      ...R([253, 'app'], null, []), note: 'The queue test-merges the green ones with each other, in memory, to see which fit together. No runner is needed for that.' },
+    { open: [P(252, 'green', { checking: true }), P(253, 'pending'), P(254, 'green', { checking: true }), P(255, 'green', { checking: true })],
+      batch: { number: null, forming: true, state: 'none', done: 0, total: 0, members: [P(251, 'green', { anchor: true })] }, main: before,
+      ...R([253, 'app'], null, []), note: '#251 is the earliest, so it anchors the batch. The other green ones are test-merged against it and each other, in memory; no runner is needed for that.' },
     { open: [P(253, 'pending'), C255], batch: B(0, 3, 'pending'), main: before,
       ...R([253, 'app'], null, [[256, 'checks'], [256, 'app']]), note: 'The batch takes #251 first, then the most that fit beside it. #255 conflicts with #252, so it waits, and its owner is told which files.' },
     { open: [P(253, 'pending'), C255], batch: B(1, 3, 'pending'), main: before,
@@ -446,7 +450,7 @@ function demoPage() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Merge queue</title>
-<style>body { margin: 0; padding: 24px 16px; background: #10120f; display: flex; justify-content: center; } ${QUEUE_CSS}</style>
+<style>body { margin: 0; padding: 24px 16px; background: #10120f; } .mq { margin: 0 auto; } ${QUEUE_CSS}</style>
 </head>
 <body>
 ${renderQueue(frames[0], { demo: frames, every: 2600 })}

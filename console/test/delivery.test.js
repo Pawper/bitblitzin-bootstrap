@@ -134,9 +134,11 @@ test('the demo shows runners at work', () => {
 });
 
 test('pull requests the queue is test-merging gleam', () => {
-  const st = qv.queueState({ open: [{ number: 251, state: 'green' }, { number: 253, state: 'pending' }], batch: null, main: [], checking: [251] });
-  assert.deepEqual(st.open.map((p) => [p.number, p.checking]), [[251, true], [253, false]]);
-  assert.match(st.note, /Test-merging #251/);
+  const st = qv.queueState({ open: [{ number: 251, state: 'green' }, { number: 252, state: 'green' }, { number: 253, state: 'pending' }], batch: null, main: [], checking: [251, 252] });
+  assert.deepEqual(st.batch.members.map((p) => [p.number, p.anchor]), [[251, true]]);
+  assert.equal(st.batch.forming, true);
+  assert.deepEqual(st.open.map((p) => [p.number, p.checking]), [[252, true], [253, false]]);
+  assert.match(st.note, /Test-merging #251, #252/);
   assert.ok(qv.demoFrames().some((f) => f.open.some((p) => p.checking)));
 });
 
