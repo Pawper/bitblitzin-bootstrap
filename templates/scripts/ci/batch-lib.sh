@@ -312,3 +312,32 @@ conflict_line() {
   if [ -n "$cl" ]; then echo "conflicts with main in $cl; resolve it on the branch, then queue it again"
   else echo "conflicts with main; resolve it on the branch, then queue it again"; fi
 }
+
+# batch_members BODY
+# The member pull requests a batch pull request's body lists, one number
+# per line, from its "- #N title. Closes #N" lines.
+batch_members() {
+  printf '%s\n' "$1" | tr -d '\r' | sed -n 's/^- #\([0-9][0-9]*\) .*/\1/p'
+}
+
+# drop_members LIST MEMBERS
+# LIST is the drain's rows, "NUMBER<TAB>...". Print LIST without the rows
+# whose number is in MEMBERS (space or line separated). A member of an
+# open batch belongs to that batch: the drain once merged two members on
+# their own while their batch ran CI, then sent the batch round again.
+drop_members() {
+  printf '%s\n' "$1" | awk -F'\t' -v m=" $(printf '%s' "$2" | tr '\n' ' ') " 'NF && index(m, " " $1 " ") == 0'
+}
+
+# queue_eta QUEUED BUSY RUNNERS [AVG_MINUTES]
+# One line on a run that waits on machines rather than tests: how many
+# jobs are queued, how many runners are busy, and a rough time to clear
+# the queue (each runner runs one job at a time; AVG_MINUTES per job,
+# default 4). Nothing when no job is queued.
+queue_eta() {
+  [ "${1:-0}" -gt 0 ] 2>/dev/null || return 0
+  qe_r=${3:-0}; [ "$qe_r" -gt 0 ] 2>/dev/null || qe_r=0
+  if [ "$qe_r" -eq 0 ]; then printf '%s job(s) queued and no runner online.\n' "$1"; return 0; fi
+  qe_eta=$(( ($1 + qe_r - 1) / qe_r * ${4:-4} ))
+  printf '%s job(s) queued, %s of %s runner(s) busy; about %s minute(s) at one job per runner. Waiting on machines, not on a failure.\n' "$1" "${2:-0}" "$qe_r" "$qe_eta"
+}
