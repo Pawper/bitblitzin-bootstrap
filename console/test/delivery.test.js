@@ -113,7 +113,7 @@ test('the queue: batch members leave Open; main lists each pull request once', (
   assert.deepEqual(v.main.map((m) => m.number), [319, 318]);
   assert.equal(v.main[1].serial, 'alone');
   const st = qv.queueState(v);
-  assert.match(st.note, /Batch #306 is testing 2/);
+  assert.match(st.note, /Batch PR #306 is testing 2/);
 });
 
 test('a lane per runner: its job and pull request, idle, or offline', () => {
@@ -138,8 +138,11 @@ test('pull requests the queue is test-merging gleam', () => {
   assert.deepEqual(st.batch.members.map((p) => [p.number, p.anchor]), [[251, true]]);
   assert.equal(st.batch.forming, true);
   assert.deepEqual(st.open.map((p) => [p.number, p.checking]), [[252, true], [253, false]]);
-  assert.match(st.note, /Test-merging #251, #252/);
+  assert.match(st.note, /Test-merging PR #251, PR #252/);
   assert.ok(qv.demoFrames().some((f) => f.open.some((p) => p.checking)));
+  const notes = qv.demoFrames().map((f) => f.note).join(' ');
+  assert.ok(!/(^|[^R] )#\d/.test(notes), 'every number in the demo says PR');
+  assert.match(notes, /PR #251 is the earliest/);
 });
 
 test('the queue panel carries its data, safely', () => {

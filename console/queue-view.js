@@ -52,6 +52,8 @@ const QUEUE_CSS = `
   background: conic-gradient(from var(--mq-a), transparent 0 62%, rgba(255,255,255,.9) 76%, var(--mq-cyan) 84%, transparent 96%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
 .mq-box.forming { border-style: dashed; }
+.mq-box-label { position: absolute; top: 10px; left: 0; right: 0; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--mq-cyan); }
+.mq-box.forming .mq-box-label { color: var(--mq-soft); font-weight: 600; }
 .mq-chip.checking::before { opacity: 1; animation: mq-gleam 1.4s linear infinite; }
 @keyframes mq-gleam { to { --mq-a: 360deg; } }
 .mq-tip { position: absolute; z-index: 5; pointer-events: none; min-width: 200px; max-width: 280px; background: #0f1113; color: var(--mq-ink);
@@ -123,6 +125,8 @@ const QUEUE_JS = `
     this.bar = document.createElement('div'); this.bar.className = 'mq-bar'; this.bar.innerHTML = '<i></i>';
     this.box.appendChild(this.bar);
     this.empty = document.createElement('div'); this.empty.className = 'mq-empty'; this.empty.textContent = 'No batch running';
+    this.label = document.createElement('div'); this.label.className = 'mq-box-label';
+    this.box.appendChild(this.label);
     this.box.appendChild(this.empty);
     this.line = document.createElement('div'); this.line.className = 'mq-line';
     this.stage.appendChild(this.box); this.stage.appendChild(this.line);
@@ -143,7 +147,7 @@ const QUEUE_JS = `
       el.addEventListener('mouseenter', show); el.addEventListener('focus', show);
       el.addEventListener('mouseleave', hide); el.addEventListener('blur', hide);
     }
-    el.querySelector('.mq-n').textContent = '#' + pr.number;
+    el.querySelector('.mq-n').textContent = 'PR #' + pr.number;
     el.classList.toggle('small', !!small);
     el.dataset.state = pr.state || 'none';
     el.classList.toggle('checking', !!pr.checking);
@@ -156,7 +160,7 @@ const QUEUE_JS = `
     var st = pr.anchor ? 'The earliest green pull request, so it anchors the batch; the others are test-merged against it.'
       : pr.where === 'batch' ? 'In the batch; ' + (STATE_WORDS[pr.state] || pr.state) : (STATE_WORDS[pr.state] || pr.state);
     t.innerHTML = '';
-    var b = document.createElement('b'); b.textContent = '#' + pr.number + '  ' + (pr.title || ''); t.appendChild(b);
+    var b = document.createElement('b'); b.textContent = 'PR #' + pr.number + '  ' + (pr.title || ''); t.appendChild(b);
     if (pr.author) lines.push('by ' + pr.author + (pr.created ? ', opened ' + ago(pr.created) : ''));
     if (pr.head) lines.push(pr.head);
     if (pr.checking) lines.push('Being test-merged with the others, in memory, to see which can go in the batch together.');
@@ -174,7 +178,7 @@ const QUEUE_JS = `
   };
   MQ.prototype.draw = function (state) {
     this.state = state;
-    var w = this.stage.clientWidth, col = [w * 0.16, w * 0.5, w * 0.84], row = 50, top = 8, self = this;
+    var w = this.stage.clientWidth, col = [w * 0.17, w * 0.5, w * 0.85], row = 50, top = 8, self = this;
     Object.keys(this.chips).forEach(function (k) { self.chips[k]._seen = false; });
     var place = function (el, cx, y) {
       var cw = el.offsetWidth || 70;
@@ -183,11 +187,11 @@ const QUEUE_JS = `
     };
     var openList = state.open || [], batch = state.batch, main = state.main || [];
     var members = batch ? batch.members : [];
-    var firstBatch = top + 16;
+    var firstBatch = top + 38;
     members.forEach(function (pr, i) { place(self.chip(Object.assign({ where: 'batch' }, pr)), col[1], firstBatch + i * row); });
     openList.forEach(function (pr, i) { place(self.chip(Object.assign({ where: 'open' }, pr)), col[0], top + 16 + i * row); });
     main.forEach(function (pr, i) { place(self.chip(Object.assign({ where: 'main', state: 'merged' }, pr), true), col[2], top + 16 + i * 36); });
-    var rows = Math.max(openList.length, members.length + 1, Math.ceil(main.length * 36 / row), 3);
+    var rows = Math.max(openList.length, members.length + 2, Math.ceil(main.length * 36 / row), 3);
     var h = top + 16 + rows * row + 20;
     this.stage.style.height = h + 'px';
     var bw = Math.min(150, w * 0.3);
@@ -197,6 +201,7 @@ const QUEUE_JS = `
     this.empty.style.opacity = batch ? 0 : 1;
     this.bar.style.opacity = batch && !batch.forming ? 1 : 0;
     this.box.classList.toggle('forming', !!(batch && batch.forming));
+    this.label.textContent = !batch ? '' : batch.forming ? 'Forming' : 'Batch PR #' + batch.number;
     var fill = batch && batch.total ? Math.round(100 * batch.done / batch.total) : 0;
     this.bar.querySelector('i').style.width = fill + '%';
     this.bar.className = 'mq-bar' + (batch && batch.state === 'red' ? ' red' : batch && batch.state === 'green' ? ' green' : '');
@@ -223,7 +228,7 @@ const QUEUE_JS = `
     var isBatch = job.pr != null && (job.batch || job.pr === batchNo);
     var isMain = !job.pr && job.branch === 'main';
     return { isBatch: isBatch, isMain: isMain,
-      text: isBatch ? 'Batch #' + job.pr : isMain ? 'main' : job.pr ? '#' + job.pr : (job.branch || 'job'),
+      text: isBatch ? 'Batch PR #' + job.pr : isMain ? 'main' : job.pr ? 'PR #' + job.pr : (job.branch || 'job'),
       cls: 'mq-pill' + (isBatch ? ' batch' : isMain ? ' main' : '') };
   }
   MQ.prototype.fly = function (pill, src) {
@@ -360,8 +365,8 @@ const QUEUE_JS = `
 // queueState(VIEW): what the browser draws, from queueView in delivery.js.
 function queueState(view) {
   const note = [];
-  if (view.checking && view.checking.length) note.push(`Test-merging ${view.checking.map((n) => '#' + n).join(', ')} to find which go in the batch together.`);
-  if (view.batch) note.push(`Batch #${view.batch.number} is testing ${view.batch.members.length} pull request(s) together.`);
+  if (view.checking && view.checking.length) note.push(`Test-merging ${view.checking.map((n) => 'PR #' + n).join(', ')} to find which go in the batch together.`);
+  if (view.batch) note.push(`Batch PR #${view.batch.number} is testing ${view.batch.members.length} pull request(s) together.`);
   const ready = view.open.filter((p) => p.state === 'green').length;
   if (ready) note.push(`${ready} green and waiting.`);
   if (!view.batch && !view.open.length) note.push('Nothing waiting.');
@@ -417,9 +422,11 @@ function demoFrames() {
   const B = (done, total, state) => ({ number: 256, state, done, total, members: [251, 252, 254].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
   const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name } : { pr, name, batch: pr === 256 });
   const R = (a, b, waiting) => ({ runners: [{ name: 'build-1', status: a ? 'busy' : 'idle', job: a ? J(...a) : null }, { name: 'build-2', status: b ? 'busy' : 'idle', job: b ? J(...b) : null }], waiting: waiting.map((w) => J(...w)), queued: waiting.length });
+  // Every number a person reads is a pull request; say so.
+  const prs = (text) => String(text).replace(/(^|[^R] )#(\d+)/g, '$1PR #$2').replace(/^#(\d+)/, 'PR #$1');
   const before = landed([250, 249, 248]);
   const after = landed([254, 252, 251, 250, 249, 248]);
-  return [
+  const frames = [
     { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green')], batch: null, main: before,
       ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. Jobs wait in one line for whichever runner frees first.' },
     { open: [P(252, 'green', { checking: true }), P(253, 'pending'), P(254, 'green', { checking: true }), P(255, 'green', { checking: true })],
@@ -438,6 +445,7 @@ function demoFrames() {
     { open: [P(253, 'green'), P(255, 'pending')], batch: null, main: after,
       ...R([255, 'checks'], ['main', 'full'], [[255, 'app']]), note: '#255\'s owner merged main in and fixed the file; it is being tested again.' },
   ];
+  return frames.map((f) => ({ ...f, note: prs(f.note), open: f.open.map((o) => (o.conflict ? { ...o, conflict: prs(o.conflict) } : o)) }));
 }
 
 // demoPage(): one self-contained page that plays the scripted queue, for
