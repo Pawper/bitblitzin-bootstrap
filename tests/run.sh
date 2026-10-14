@@ -1207,6 +1207,28 @@ eq "no loop in worktrees.sh ends on a bare test" "0" "$(grep -c '^ *\[ [^]]*\] &
 eq "close says a pull request was already closed" "1" "$(grep -c 'was already closed; added the reason' "$root/templates/scripts/worktrees.sh")"
 eq "close reads and closes over REST" "0" "$(grep -c 'gh pr view\|gh pr close' "$root/templates/scripts/worktrees.sh")"
 
+
+printf '\n# what an agent did after a refusal\n'
+. "$root/hooks/scripts/resolution-lib.sh"
+eq "moved the file aside: followed" "followed" "$(resolution_of block-delete Bash 'git mv a.txt aside/a.txt')"
+eq "deleted it through Python: a possible workaround" "workaround" "$(resolution_of block-delete Bash "python -c 'import os; os.remove(\"a\")'")"
+eq "find -delete is a workaround too" "workaround" "$(resolution_of block-delete Bash 'find . -name x -delete')"
+eq "an unrelated command says nothing" "" "$(resolution_of block-delete Bash 'ls -la')"
+eq "asking the person settles any refusal" "asked" "$(resolution_of block-force-push AskUserQuestion '')"
+eq "a plain push after a refused force push: followed" "followed" "$(resolution_of block-force-push Bash 'git push origin feature')"
+eq "a plus-refspec push: a workaround" "workaround" "$(resolution_of block-force-push Bash 'git push origin +feature')"
+eq "merging over the API after a refused gh pr merge: a workaround" "workaround" "$(resolution_of require-batch-merge Bash 'gh api -X PUT repos/o/r/pulls/12/merge')"
+eq "through the queue: followed" "followed" "$(resolution_of require-batch-merge Bash 'sh scripts/ci/merge-queue.sh --drain')"
+eq "writing STATUS.md by redirect: a workaround" "workaround" "$(resolution_of block-generated-page Bash 'echo x >> STATUS.md')"
+eq "rebuilding it: followed" "followed" "$(resolution_of block-generated-page Bash 'sh status/build.sh')"
+eq "one test file after a refused sweep: followed" "followed" "$(resolution_of block-full-test-sweep Bash 'npx vitest run src/a.test.ts')"
+eq "an issue made over the API without a State: a workaround" "workaround" "$(resolution_of require-state-label Bash 'gh api -X POST repos/o/r/issues -f title=x')"
+eq "an agent dispatched again: followed" "followed" "$(resolution_of require-agent-model Agent '')"
+eq "the feed, newest first, open while unsettled" "t3	block-delete	open
+t2	block-delete	workaround
+t1	block-force-push	followed" "$(resolution_feed "$(printf 't1\tblock-force-push\ts\ta\nt2\tblock-delete\ts\tb\nt3\tblock-delete\ts\tc')" "$(printf 'x\ta\tblock-force-push\ts\tfollowed\nx\tb\tblock-delete\ts\tworkaround')")"
+eq "a hook line from before ids is keyed by its time" "t0	block-delete	followed" "$(resolution_feed "$(printf 't0\tblock-delete')" "$(printf 'x\tt0\tblock-delete\ts\tfollowed')")"
+eq "every refusing hook logs, and the watcher is registered three times" "9 3" "$(grep -l 'refusal-log.sh' "$root"/hooks/scripts/block-*.sh "$root"/hooks/scripts/require-*.sh | wc -l | tr -d ' ') $(grep -c watch-resolution "$root/hooks/hooks.json")"
 printf '\n# runner watch\n'
 runs=$(printf '11\tCI\tfeature\tqueued\t1000\n12\tCI\tmain\tqueued\t1500\n13\tCI\tother\tin_progress\t100\n14\tCI\tx\tqueued\t1900\n')
 eq "runs queued past ten minutes, oldest first" "11	CI	feature	16

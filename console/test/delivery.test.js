@@ -157,6 +157,26 @@ test('clashes: left-out pairs from the queue, and conflicts with main', () => {
   assert.deepEqual([251, 252, 253, 254, 255, 257].filter((n) => !last.main.some((m) => m.number === n)), [], 'every pull request lands');
 });
 
+test('hook resolutions: per hook rates, a feed, workarounds said', () => {
+  const log = [
+    { at: at(5), hook: 'block-delete', id: 'a' }, { at: at(4), hook: 'block-delete', id: 'b' },
+    { at: at(3), hook: 'block-delete', id: 'c' }, { at: at(2), hook: 'block-force-push', id: 'd' }, { at: at(1), hook: 'block-delete', id: 'e' },
+  ];
+  const res = [{ id: 'a', outcome: 'followed' }, { id: 'b', outcome: 'workaround' }, { id: 'c', outcome: 'retried' }, { id: 'd', outcome: 'followed' }];
+  const r = d.resolutionFeed(log, res, NOW);
+  assert.equal(r.workarounds, 1);
+  assert.equal(r.byHook['block-delete'].total, 4);
+  assert.equal(r.byHook['block-delete'].open, 1);
+  assert.equal(Math.round(r.byHook['block-delete'].followRate * 100), 33);
+  assert.deepEqual(r.feed.map((f) => f.outcome), ['open', 'followed', 'retried', 'workaround', 'followed']);
+  const s = d.summarize({ hookLog: log, hookResolved: res }, NOW);
+  assert.match(s.say.join(' '), /possible workaround/);
+  const html = render.renderHookFeed(r);
+  assert.match(html, /class="alarm"/);
+  assert.match(html, /33% followed/);
+  assert.match(render.renderHookFeed(null), /None on record/);
+});
+
 test('the queue panel carries its data, safely', () => {
   const html = qv.renderQueue({ open: [{ number: 1, title: '</script><b>x' }], batch: null, main: [] }, { poll: 'queue.json' });
   assert.ok(html.includes('data-queue'));

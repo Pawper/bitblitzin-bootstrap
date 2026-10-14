@@ -182,14 +182,16 @@ function summarize(raw, now) {
 
   const hooks = {};
   (raw.hookLog || []).forEach((h) => { if (within(h.at, t, WINDOW_DAYS)) hooks[h.hook] = (hooks[h.hook] || 0) + 1; });
+  const resolution = resolutionFeed(raw.hookLog || [], raw.hookResolved || [], t);
 
   const say = [];
+  if (resolution.workarounds) say.push(`${resolution.workarounds} refusal${resolution.workarounds === 1 ? ' was' : 's were'} followed by a possible workaround: the agent may have reached the same effect another way. See the hook feed.`);
   if (main.redNow) say.push(`Main is red, and has been for ${minutes(main.redFor)}. Nothing else should merge until it is fixed.`);
   if (runner.share != null && runner.share > 0.5) say.push(`Jobs spent ${Math.round(runner.share * 100)}% of their time waiting for a runner. Add a runner, or run fewer jobs a pull request.`);
   if (ci.trend === 'slower') say.push(`CI got slower this week: ${minutes(ci.week)} a pull request, against ${minutes(ci.before)} the week before.`);
   if (runner.total > 0 && runner.online < Math.min(2, runner.total || 2)) say.push(`${runner.online} of ${runner.total} runners are online. Jobs wait while they are offline.`);
   if (serial > 0 && serial > batches * 2 && serial >= 3) say.push(`${serial} serial merges against ${batches} batches. Most pull requests could have landed together with --drain.`);
-  return { windowDays: WINDOW_DAYS, ci, runner, merges, main, queue, hooks, say, read: raw.read || [] };
+  return { windowDays: WINDOW_DAYS, ci, runner, merges, main, queue, hooks, resolution, say, read: raw.read || [] };
 }
 
 // runnerLanes(RUNNERS, ACTIVE_JOBS, OPEN): one lane per runner: its
@@ -211,6 +213,28 @@ function runnerLanes(runners, jobs, open) {
   const waiting = (jobs || []).filter((j) => j.status === 'queued')
     .map((j) => ({ name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch, batch: /^batch-/.test(j.head_branch || '') }));
   return { lanes, waiting, queued: waiting.length };
+}
+
+// resolutionFeed(REFUSALS, RESOLVED, NOW): what agents did after each
+// refusal, from the hook log and the resolution log. Per hook, how many
+// were followed, retried, asked, stopped, moved on or worked around, and
+// the newest twenty, newest first. A refusal nothing settled yet is open.
+const OUTCOMES = ['followed', 'asked', 'retried', 'moved on', 'stopped', 'workaround', 'open'];
+function resolutionFeed(refusals, resolved, now) {
+  const out = {};
+  resolved.forEach((r) => { out[r.id] = r.outcome; });
+  const recent = refusals.filter((h) => within(h.at, now, WINDOW_DAYS))
+    .map((h) => ({ at: h.at, hook: h.hook, outcome: out[h.id || h.at] || 'open' }));
+  const byHook = {};
+  recent.forEach((r) => {
+    const b = byHook[r.hook] || (byHook[r.hook] = { total: 0 });
+    b.total += 1; b[r.outcome] = (b[r.outcome] || 0) + 1;
+  });
+  Object.values(byHook).forEach((b) => {
+    const settled = b.total - (b.open || 0);
+    b.followRate = settled ? (b.followed || 0) / settled : null;
+  });
+  return { byHook, feed: recent.slice(-20).reverse(), workarounds: recent.filter((r) => r.outcome === 'workaround').length };
 }
 
 // queueView(RAW): the merge queue as three columns. Open pull requests
@@ -342,14 +366,18 @@ async function gather(root, opts) {
   raw.checking = /^checking /.test(now) ? now.split(' ').slice(1).map(Number).filter(Boolean) : [];
   raw.flaky = readLines(path.join(root, '.scratch', 'queue', 'flaky.tsv'));
   raw.hookLog = readLines(path.join(root, '.scratch', 'hooks.log')).map((l) => {
-    const [at, hook] = l.split('\t');
-    return { at, hook };
+    const [at, hook, session, id] = l.split('\t');
+    return { at, hook, session, id };
   }).filter((h) => h.hook);
+  raw.hookResolved = readLines(path.join(root, '.scratch', 'hooks-resolved.log')).map((l) => {
+    const [at, id, hook, session, outcome] = l.split('\t');
+    return { at, id, hook, session, outcome };
+  }).filter((r) => r.outcome);
   cache.set(key, { at: Date.now(), raw });
   return raw;
 }
 
 module.exports = {
-  gather, summarize, queueView, runnerLanes,
+  gather, summarize, queueView, runnerLanes, resolutionFeed, OUTCOMES,
   median, pct, minutes, rollup, batchMembers, mergedNumber, serialReason, redSpells, trend,
 };
