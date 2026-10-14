@@ -66,7 +66,14 @@ const QUEUE_CSS = `
 .mq-lane.idle .ld { background: var(--mq-green); }
 .mq-lane.offline { opacity: .5; } .mq-lane.offline .ld { background: var(--mq-red); }
 .mq-lane .rn { font-weight: 600; }
-.mq-lane .job { color: var(--mq-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mq-lane .job { color: var(--mq-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.mq-pill { flex: none; height: 24px; padding: 0 10px; display: inline-flex; align-items: center; border-radius: 8px; background: #1a1c22; border: 1px solid #2c3036;
+  font-weight: 700; font-size: 11px; color: var(--mq-ink); transition: transform .9s cubic-bezier(.3,.7,.2,1), opacity .4s ease; will-change: transform; }
+.mq-pill.batch { border-color: var(--mq-cyan); color: var(--mq-cyan); box-shadow: 0 0 10px rgba(56,200,240,.3); }
+.mq-pill.main { border-color: var(--mq-amber); color: var(--mq-amber); }
+.mq-chip.working { box-shadow: 0 0 0 1px var(--mq-cyan), 0 0 12px rgba(56,200,240,.35); }
+.mq-box.working { animation: mq-breathe 2s ease-in-out infinite; }
+@keyframes mq-breathe { 50% { box-shadow: 0 0 28px rgba(56,200,240,.6), inset 0 0 16px rgba(56,200,240,.2); } }
 .mq-lane.busy .job { color: var(--mq-ink); }
 .mq-foot { margin-top: 14px; color: var(--mq-soft); font-size: 12px; min-height: 1.4em; }
 .mq-empty { position: absolute; left: 0; right: 0; top: 40%; text-align: center; color: var(--mq-soft); font-size: 12px; padding: 0 10px; transition: opacity .4s ease; }
@@ -195,14 +202,44 @@ const QUEUE_JS = `
     q.className = 'q' + (n > state.runners.length ? ' many' : '');
     var have = {};
     Array.prototype.forEach.call(lanes.children, function (el) { have[el.dataset.name] = el; });
+    var self = this, batchNo = state.batch ? state.batch.number : null, working = {}, batchWorking = false;
     state.runners.forEach(function (r) {
       var el = have[r.name];
-      if (!el) { el = document.createElement('div'); el.dataset.name = r.name; el.innerHTML = '<span class="ld"></span><span class="rn"></span><span class="job"></span>'; lanes.appendChild(el); }
+      if (!el) { el = document.createElement('div'); el.dataset.name = r.name; el.innerHTML = '<span class="ld"></span><span class="rn"></span><span class="job"><span class="slot"></span><span class="what"></span></span>'; lanes.appendChild(el); }
       delete have[r.name];
       el.className = 'mq-lane ' + r.status;
       el.querySelector('.rn').textContent = r.name;
-      el.querySelector('.job').textContent = r.status === 'offline' ? 'offline' : r.job ? (r.job.pr ? '#' + r.job.pr + ' \u00b7 ' : (r.job.branch ? r.job.branch + ' \u00b7 ' : '')) + r.job.name : r.status === 'busy' ? 'busy' : 'idle';
+      var job = r.job, slot = el.querySelector('.slot'), what = el.querySelector('.what');
+      var isBatch = job && job.pr != null && (job.batch || job.pr === batchNo);
+      var isMain = job && !job.pr && job.branch === 'main';
+      var key = job ? (isBatch ? 'b' : isMain ? 'm' : 'p') + (job.pr || job.branch || '') : '';
+      what.textContent = r.status === 'offline' ? 'offline' : job ? job.name : r.status === 'busy' ? 'busy' : 'idle';
+      if (job && job.pr && !isBatch) working[job.pr] = true;
+      if (isBatch) batchWorking = true;
+      if (slot.dataset.key === key) return;
+      slot.dataset.key = key;
+      slot.innerHTML = '';
+      if (!job || (!job.pr && !isMain)) return;
+      // The pill flies in from where its pull request sits: the chip in
+      // Open, the batch box, or main's line.
+      var pill = document.createElement('span');
+      pill.className = 'mq-pill' + (isBatch ? ' batch' : isMain ? ' main' : '');
+      pill.textContent = isBatch ? 'Batch #' + job.pr : isMain ? 'main' : '#' + job.pr;
+      slot.appendChild(pill);
+      var src = isBatch ? self.box : isMain ? self.line : self.chips['pr-' + job.pr];
+      if (src && !self.root.classList.contains('still')) {
+        var a = src.getBoundingClientRect(), b = pill.getBoundingClientRect();
+        pill.style.transition = 'none';
+        pill.style.transform = 'translate(' + Math.round(a.left + a.width / 2 - b.left - b.width / 2) + 'px,' + Math.round(a.top + a.height / 2 - b.top - b.height / 2) + 'px) scale(.8)';
+        pill.style.opacity = '0.6';
+        void pill.offsetWidth;
+        pill.style.transition = '';
+        pill.style.transform = '';
+        pill.style.opacity = '';
+      }
     });
+    Object.keys(self.chips).forEach(function (k) { self.chips[k].classList.toggle('working', !!working[k.slice(3)]); });
+    this.box.classList.toggle('working', batchWorking);
     Object.keys(have).forEach(function (k) { lanes.removeChild(have[k]); });
   };
   window.MergeQueueView = MQ;
@@ -278,7 +315,8 @@ function demoFrames() {
   const landed = (ns) => ns.map((n) => ({ number: n, title: n > 250 ? `${t[n][0]} (#${n})` : `Earlier work (#${n})`, at: null }));
   const B = (members, done, total, state) => ({ number: 256, state, done, total, members: members.map((n) => ({ ...P(n, state === 'green' ? 'green' : 'pending') })) });
   const R = (a, b, q) => ({ runners: [lane('build-1', a), lane('build-2', b)], queued: q });
-  const lane = (name, job) => ({ name, status: job ? 'busy' : 'idle', job: job ? { pr: job[0], name: job[1] } : null });
+  const lane = (name, job) => ({ name, status: job ? 'busy' : 'idle',
+    job: !job ? null : job[0] === 'main' ? { pr: null, branch: 'main', name: job[1] } : { pr: job[0], name: job[1], batch: job[0] === 256 } });
   const frames = [
     { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'red')], batch: null, main: landed([250, 249, 248]), note: 'Three pull requests are green. #253 is still testing; #255 failed.' },
     { open: [P(253, 'pending'), P(255, 'red')], batch: B([251, 252, 254], 0, 3, 'pending'), main: landed([250, 249, 248]), note: 'The green ones go into one batch, so they are tested together once.' },
@@ -294,7 +332,7 @@ function demoFrames() {
     R([256, 'app'], [255, 'app'], 1),
     R([256, 'app'], [255, 'checks'], 0),
     R([256, 'CI passed'], null, 0),
-    R([254, 'full'], null, 0),
+    R(['main', 'full'], null, 0),
     R(null, null, 0),
   ];
   return frames.map((f, i) => ({ ...f, ...work[i] }));

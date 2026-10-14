@@ -205,7 +205,7 @@ function runnerLanes(runners, jobs, open) {
     return {
       name: r.name,
       status: r.status === 'online' ? (j || r.busy ? 'busy' : 'idle') : 'offline',
-      job: j ? { name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch } : null,
+      job: j ? { name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch, batch: /^batch-/.test(j.head_branch || '') } : null,
     };
   });
   return { lanes, queued: (jobs || []).filter((j) => j.status === 'queued').length };
