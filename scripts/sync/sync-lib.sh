@@ -70,6 +70,21 @@ missing_jobs() {
   done
 }
 
+# split_checks PROJECT_YML
+# The cheap rule checks a project's ci.yml still runs as jobs of their
+# own, one per line. Before 0.9.8 the template ran each as its own job;
+# on self-hosted runners every job pays a pickup and a checkout, and ten
+# jobs on two runners queued ten minutes for two of work. Two or more
+# such jobs are worth moving into one "checks" job; fewer print nothing.
+split_checks() {
+  sc_have=$(workflow_jobs "$1")
+  sc_out=$(for sc_j in classify line-endings status-page numbering-check spec-check setup-check shared-check; do
+    printf '%s\n' "$sc_have" | grep -qxF "$sc_j" && printf '%s\n' "$sc_j"
+  done)
+  [ "$(printf '%s' "$sc_out" | grep -c .)" -ge 2 ] && printf '%s\n' "$sc_out"
+  return 0
+}
+
 # missing_lines TEMPLATE PROJECT
 # Lines of a template file (not comments, not blank) that the project's
 # copy lacks, such as an attribute in .gitattributes or a path in

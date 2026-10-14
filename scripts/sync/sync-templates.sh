@@ -104,6 +104,11 @@ for p in $defaults; do echo "  new config, would be added with its defaults: $p"
 # --only, which is about one feature).
 if [ -z "$only" ] && [ -f .github/workflows/ci.yml ]; then
   jobs=$(missing_jobs "$(cat "$tpl/.github/workflows/ci.yml")" "$(cat .github/workflows/ci.yml)")
+  split=$(split_checks "$(cat .github/workflows/ci.yml)")
+  if [ -n "$split" ]; then
+    echo "  ci.yml is yours and still runs $(printf '%s\n' "$split" | grep -c .) cheap checks as jobs of their own ($(printf '%s' "$split" | tr '\n' ' ' | sed 's/ $//')). The template now runs them as steps of one \"checks\" job and the install, tests and build in one \"app\" job, with a concurrency group: about 3 runner jobs a pull request instead of 10. How to move: $plugin/CI-MIGRATION.md"
+    jobs=$(printf '%s\n' "$jobs" | grep -vxF checks || true)
+  fi
   [ -n "$jobs" ] && echo "  ci.yml is yours; the template has jobs it lacks: $(printf '%s' "$jobs" | tr '\n' ' ')(copy them from $tpl/.github/workflows/ci.yml and add each to CI passed)"
 fi
 for f in .gitattributes .gitignore; do

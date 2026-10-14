@@ -24,6 +24,9 @@
 # is listed as skipped. On Windows, long paths are turned on and a linked
 # node_modules is unlinked first, the two things that make removal fail.
 set -e
+# Never stop without a word: set -e ends the script at the first failing
+# command, and a close once exited 1 with nothing printed.
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "worktrees.sh ${cmd:-} stopped with exit $rc at: ${step:-start}" >&2' EXIT
 here=$(dirname "$0")
 . "$here/worktrees-lib.sh"
 
@@ -93,8 +96,10 @@ drop_branch() {
   [ -n "$1" ] && [ "$1" != "$default_local" ] || return 0
   git show-ref --verify --quiet "refs/heads/$1" || return 0
   if [ "$2" = closed ]; then
-    git tag -f "closed/$1" "refs/heads/$1" >/dev/null 2>&1 && echo "kept the commits of $1 as tag closed/$1"
-    git branch -D "$1" >/dev/null 2>&1 && echo "removed local branch $1"
+    if git tag -f "closed/$1" "refs/heads/$1" >/dev/null 2>&1; then echo "kept the commits of $1 as tag closed/$1"
+    else echo "could not tag $1 as closed/$1; its branch is kept"; return 0; fi
+    if git branch -D "$1" >/dev/null 2>&1; then echo "removed local branch $1"
+    else echo "could not remove local branch $1 (a worktree may still hold it); run prune later"; fi
   else
     git branch -d "$1" >/dev/null 2>&1 || git branch -D "$1" >/dev/null 2>&1
     echo "removed local branch $1 (merged)"
@@ -162,14 +167,20 @@ $closed_heads" '
     ;;
   close)
     [ -n "$pr" ] && [ -n "$reason" ] || { echo 'Usage: sh scripts/worktrees.sh close PR "why, or what replaced it"' >&2; exit 2; }
-    branch=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+    step="reading pull request $pr"
+    branch=$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq .head.ref)
+    [ -n "$branch" ] || { echo "Could not read pull request $pr from GitHub." >&2; exit 1; }
+    step="finding its worktree"
     path=$(worktree_for_branch "$pairs" "$branch")
     if [ -n "$path" ] && ! is_clean "$path"; then
       echo "Not closing: the worktree at $path has uncommitted files outside .scratch/. Commit them or move them aside first." >&2
       exit 1
     fi
-    gh pr close "$pr" --comment "$reason" >/dev/null
+    step="commenting and closing $pr"
+    gh api -X POST "repos/{owner}/{repo}/issues/$pr/comments" -f body="$reason" >/dev/null
+    gh api -X PATCH "repos/{owner}/{repo}/pulls/$pr" -f state=closed >/dev/null
     echo "closed pull request $pr with its reason"
+    step="removing its worktree and branch"
     if [ -n "$path" ]; then remove_one "$path" && echo "removed $path" || echo "could not remove $path; run prune later"; fi
     drop_branch "$branch" closed
     ;;

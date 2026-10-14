@@ -1162,6 +1162,36 @@ eq "lines the project's file lacks, comments ignored" "tasks.md merge=union" "$(
 * text=auto eol=lf
 tasks.md merge=union' '* text=auto eol=lf')"
 
+eq "a ci.yml with one job per rule is reported" "classify
+line-endings
+status-page" "$(split_checks "$(printf 'jobs:\n  classify:\n    x: 1\n  line-endings:\n    x: 1\n  status-page:\n    x: 1\n  app:\n    x: 1\n')")"
+eq "a ci.yml with one checks job is not" "" "$(split_checks "$(printf 'jobs:\n  checks:\n    x: 1\n  app:\n    x: 1\n')")"
+eq "the template itself is not" "" "$(split_checks "$(cat "$root/templates/.github/workflows/ci.yml")")"
+eq "sync points a split ci.yml at the migration page" "1" "$(grep -c 'plugin/CI-MIGRATION.md' "$root/scripts/sync/sync-templates.sh")"
+eq "the migration page ships with the plugin" "yes" "$([ -f "$root/CI-MIGRATION.md" ] && echo yes || echo no)"
+
+printf '\n# the CI template is three jobs on a pull request\n'
+ciy=$(cat "$root/templates/.github/workflows/ci.yml")
+eq "its jobs" "checks
+app
+ci-passed
+full
+report-red
+report-green" "$(workflow_jobs "$ciy")"
+eq "CI passed waits on checks and app" "1" "$(printf '%s\n' "$ciy" | grep -c 'needs: \[checks, app\]')"
+eq "one checkout in checks, one in app, one in full" "3" "$(printf '%s\n' "$ciy" | grep -c 'uses: actions/checkout@v4')"
+eq "a newer push cancels an older pull request run" "1" "$(printf '%s\n' "$ciy" | grep -c 'cancel-in-progress: true')"
+eq "main pushes are each their own group" "1" "$(printf '%s\n' "$ciy" | grep -c "pull_request.number || github.sha")"
+eq "every rule script still runs" "7" "$(for f in classify.sh line-endings.sh status/check.sh numbering-check.sh spec-check.sh setup-check.sh shared-check.sh; do printf '%s\n' "$ciy" | grep -q "$f" && echo x; done | grep -c x)"
+eq "the env check still runs" "1" "$(printf '%s\n' "$ciy" | grep -c 'client-env-check.sh')"
+
+printf '\n# set -e never swallows a return code\n'
+eq "no bare msg=\$(f); code=\$? in the queue" "0" "$(grep -c '=\$([^)]*); *code=\$?' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "a pending run says it is waiting, in both waits" "2" "$(grep -cF 'code=0; msg=$(diagnose "$run_id") || code=$?' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "a batch of one merges serially" "1" "$(grep -c 'merging it serially instead of opening a batch of one' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "worktrees.sh never stops without a word" "1" "$(grep -c 'stopped with exit \$rc at' "$root/templates/scripts/worktrees.sh")"
+eq "close reads and closes over REST" "0" "$(grep -c 'gh pr view\|gh pr close' "$root/templates/scripts/worktrees.sh")"
+
 printf '\n# runner watch\n'
 runs=$(printf '11\tCI\tfeature\tqueued\t1000\n12\tCI\tmain\tqueued\t1500\n13\tCI\tother\tin_progress\t100\n14\tCI\tx\tqueued\t1900\n')
 eq "runs queued past ten minutes, oldest first" "11	CI	feature	16

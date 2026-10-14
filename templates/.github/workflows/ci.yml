@@ -1,15 +1,24 @@
-# CI skeleton. A PR runs only the jobs for the classes it touches; a push to
-# main runs everything and opens an issue when it fails. There are no path
-# filters on the workflow itself: every update to a PR starts a run, so the
-# merge queue never waits on a run that was skipped.
+# CI skeleton. Three runner jobs on a pull request: "checks" (every cheap
+# rule, as steps after one checkout), "app" (one install, then the
+# type-check, the tests and the build, only when the change touches the
+# app) and "CI passed". A push to main runs "checks" and the full suite,
+# and opens an issue when it fails. There are no path filters on the
+# workflow itself: every update to a PR starts a run, so the merge queue
+# never waits on a run that was skipped.
 #
-# Replace each "echo" step with the project's real command. Keep the job
-# names: the merge queue reads nothing from them, but people do.
+# Why so few jobs: on self-hosted runners each job pays for a pickup, a
+# checkout and a setup, which cost more than a 2-second script. Ten small
+# jobs on two runners spent ten minutes queued for two minutes of work. A
+# new rule is a step in "checks", not a job of its own.
+#
+# Replace each "echo" step with the project's real command, and never run
+# one command twice: a step that repeats one above is a runner minute paid
+# for nothing.
 #
 # RUNS_ON is the runner label for every job here. ubuntu-latest for hosted
-# runners; [self-hosted, windows] for a studio's own machines, which is
-# what both existing studio projects use. The gh-only workflows (audit,
-# board sync, state label, runner watch) stay hosted; they need no code.
+# runners; [self-hosted, windows] for a studio's own machines. The gh-only
+# workflows (audit, board sync, state label, runner watch) stay hosted;
+# they need no code.
 name: CI
 
 on:
@@ -20,6 +29,13 @@ on:
 permissions:
   contents: read
   issues: write
+
+# A new push to a pull request cancels its older run, which would
+# otherwise hold a runner for a commit nobody will merge. Each push to main
+# is its own group: every commit on main gets its full run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 # RUN_SHELL is the shell every step here runs in. On hosted runners it is
 # "bash". On a Windows self-hosted runner it must be Git's bash by its
@@ -32,168 +48,108 @@ defaults:
     shell: RUN_SHELL
 
 jobs:
-  classify:
+  checks:
+    # Every cheap rule, one checkout. Each step names the rule it enforces;
+    # the step that failed is the rule that was broken.
     runs-on: RUNS_ON
     outputs:
       classes: ${{ steps.classes.outputs.classes }}
+    env:
+      BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - id: classes
+        name: Classify the change
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
-          else
-            base="${{ github.event.before }}"
-            case "$base" in 0000000000000000000000000000000000000000) base="${{ github.sha }}~1" ;; esac
-          fi
+          base="$BASE"
+          case "$base" in ""|0000000000000000000000000000000000000000) base="${{ github.sha }}~1" ;; esac
           classes=$(sh scripts/ci/classify.sh "$base" "${{ github.sha }}")
           echo "classes=$classes" >> "$GITHUB_OUTPUT"
           echo "Classes: $classes"
-
-  app:
-    needs: classify
-    if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'app') || contains(needs.classify.outputs.classes, 'tests') || contains(needs.classify.outputs.classes, 'other'))
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build and run the tests for this class
-        # When this gets slow, shard it: add "strategy: matrix: shard: [1, 2, 3, 4]"
-        # to this job and pass the shard to the runner, for example
-        # "pytest --splits 4 --group ${{ matrix.shard }}" or "vitest --shard=N/4".
-        run: echo "replace with the build and the app tests"
-
-  build:
-    # The production build, on every pull request that touches the app.
-    # Agents never build inside a worktree (build output does not belong
-    # there), so without this job nobody builds before merging; tests and
-    # the type-check passed on a client bug that only the build and a page
-    # load would show. Replace BUILD_COMMAND with the project's build, for
-    # example "npm ci && npm run build" in the app's folder.
-    needs: classify
-    if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'app') || contains(needs.classify.outputs.classes, 'other'))
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fail when a client file hands process.env to anything whole
-        run: sh scripts/ci/client-env-check.sh
-      - name: The production build
-        run: echo "replace with BUILD_COMMAND"
-
-  data:
-    needs: classify
-    if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'data') || contains(needs.classify.outputs.classes, 'other'))
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check the data shape
-        run: echo "replace with the seed and migration checks"
-
-  docs:
-    needs: classify
-    if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'docs') || contains(needs.classify.outputs.classes, 'other'))
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check the docs
-        run: echo "replace with the link and spelling checks"
-
-  spec-check:
-    # A change to src/ belongs to a spec: the pull request names it in its
-    # body ("Spec: specs/<feature>") or, when the design changed, changes
-    # the feature's folder. Naming is the normal case; a touch requirement
-    # alone made every pull request append to spec.md.
-    needs: classify
-    if: github.event_name == 'pull_request' && (contains(needs.classify.outputs.classes, 'app') || contains(needs.classify.outputs.classes, 'other'))
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Fail when a text file has CRLF endings
+        # Every PR and every push: mixed endings make every diff a conflict.
+        run: sh scripts/ci/line-endings.sh
+      - name: Fail when STATUS.md is stale
+        # Every PR and every push: the page must never go stale.
+        run: sh status/check.sh
+      - name: Fail on a reused number or a running task number
+        # Two numbered files with one number, or a task with a running
+        # number instead of its issue number; a batch that merged two
+        # migrations each called 0022 fails before main.
+        if: github.event_name == 'pull_request'
+        run: sh scripts/ci/numbering-check.sh "$BASE" "${{ github.sha }}"
       - name: Fail when src/ changed without naming or changing its spec
+        # A change to src/ belongs to a spec: the pull request names it in
+        # its body ("Spec: specs/<feature>") or, when the design changed,
+        # changes the feature's folder.
+        if: github.event_name == 'pull_request' && (contains(steps.classes.outputs.classes, 'app') || contains(steps.classes.outputs.classes, 'other'))
         env:
           SPEC_TEXT: |
             ${{ github.event.pull_request.title }}
             ${{ github.event.pull_request.body }}
-        run: sh scripts/ci/spec-check.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
-
-  setup-check:
-    # A change to a setup file must come with a line in SETUP.md.
-    needs: classify
-    if: github.event_name == 'pull_request'
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        run: sh scripts/ci/spec-check.sh "$BASE" "${{ github.sha }}"
       - name: Fail when a setup file changed without SETUP.md
-        run: sh scripts/ci/setup-check.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
-
-  shared-check:
-    # A fix to shared code gets its own pull request. Passes when the list
-    # of shared paths is empty.
-    needs: classify
-    if: github.event_name == 'pull_request'
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        if: github.event_name == 'pull_request'
+        run: sh scripts/ci/setup-check.sh "$BASE" "${{ github.sha }}"
       - name: Fail when shared code is changed together with other work
-        run: sh scripts/ci/shared-check.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
+        # Passes when the list of shared paths is empty.
+        if: github.event_name == 'pull_request'
+        run: sh scripts/ci/shared-check.sh "$BASE" "${{ github.sha }}"
+      - name: Fail when a client file hands process.env to anything whole
+        if: github.event_name == 'pull_request' && (contains(steps.classes.outputs.classes, 'app') || contains(steps.classes.outputs.classes, 'other'))
+        run: sh scripts/ci/client-env-check.sh
+      # A project with data or docs checks of its own adds them here as
+      # steps, with "if: contains(steps.classes.outputs.classes, 'data')"
+      # (or 'docs'). Never repeat a step above.
 
-  numbering-check:
-    # Two numbered files with one number, or a task with a running number
-    # instead of its issue number. Runs on every pull request, so a batch
-    # that merged two migrations each called 0022 fails before main.
-    if: github.event_name == 'pull_request'
+  app:
+    # One install, then everything that needs it. The production build runs
+    # here on every pull request that touches the app: agents never build
+    # inside a worktree, so without it nobody builds before merging, and
+    # tests and the type-check once passed on a client bug only the build
+    # would show.
+    needs: checks
+    if: github.event_name == 'pull_request' && (contains(needs.checks.outputs.classes, 'app') || contains(needs.checks.outputs.classes, 'tests') || contains(needs.checks.outputs.classes, 'other'))
     runs-on: RUNS_ON
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Fail on a reused number or a running task number
-        run: sh scripts/ci/numbering-check.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
-
-  line-endings:
-    # Runs on every PR and every push: mixed endings make every diff a conflict.
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fail when a text file has CRLF endings
-        run: sh scripts/ci/line-endings.sh
-
-  status-page:
-    # Runs on every PR and every push: the page must never go stale.
-    runs-on: RUNS_ON
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fail when STATUS.md is stale
-        run: sh status/check.sh
+      - name: Install once
+        run: echo "replace with the install, for example npm ci in the app's folder"
+      - name: Type-check
+        run: echo "replace with the type-check, for example npx tsc --noEmit"
+      - name: Tests for this class
+        # When this gets slow, shard it: add "strategy: matrix: shard: [1, 2, 3, 4]"
+        # to this job and pass the shard to the runner, for example
+        # "pytest --splits 4 --group ${{ matrix.shard }}" or "vitest run --shard=N/4".
+        run: echo "replace with the app tests"
+      - name: The production build
+        if: contains(needs.checks.outputs.classes, 'app') || contains(needs.checks.outputs.classes, 'other')
+        run: echo "replace with BUILD_COMMAND"
 
   ci-passed:
-    # The one check branch protection requires. It waits for whichever class
-    # jobs ran and reports once. A class job that was skipped on purpose
-    # counts as fine; one that failed or was cancelled does not. Never put the
-    # per-class jobs in branch protection: they are skipped when a change does
-    # not need them, and a required check that never reports blocks the merge.
+    # The one check branch protection requires. It reports once for both
+    # jobs. "app" skipped on purpose counts as fine; failed or cancelled
+    # does not. Never put "checks" or "app" in branch protection: "app" is
+    # skipped when a change does not need it, and a required check that
+    # never reports blocks the merge.
     name: CI passed
-    needs: [classify, app, build, data, docs, spec-check, setup-check, shared-check, numbering-check, line-endings, status-page]
+    needs: [checks, app]
     if: always() && github.event_name == 'pull_request'
     runs-on: RUNS_ON
     steps:
-      - name: Report once for every class check that ran
+      - name: Report once for both jobs
         run: |
           failed=0
-          for pair in "classify:${{ needs.classify.result }}" "app:${{ needs.app.result }}" "build:${{ needs.build.result }}" "data:${{ needs.data.result }}" "docs:${{ needs.docs.result }}" "spec-check:${{ needs.spec-check.result }}" "setup-check:${{ needs.setup-check.result }}" "shared-check:${{ needs.shared-check.result }}" "numbering-check:${{ needs.numbering-check.result }}" "line-endings:${{ needs.line-endings.result }}" "status-page:${{ needs.status-page.result }}"; do
+          for pair in "checks:${{ needs.checks.result }}" "app:${{ needs.app.result }}"; do
             job=${pair%%:*}
             result=${pair#*:}
             echo "$job: $result"
             case "$result" in failure|cancelled) failed=1 ;; esac
           done
-          [ "$failed" -eq 0 ] || { echo "A class check failed; see the jobs above." >&2; exit 1; }
-          echo "Every class check that ran is green."
+          [ "$failed" -eq 0 ] || { echo "A check failed; see the jobs above." >&2; exit 1; }
+          echo "Every check that ran is green."
 
   full:
     # The gate on main after every merge. The whole suite, nothing skipped.
@@ -210,7 +166,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run everything
-        run: echo "replace with the full suite"
+        run: echo "replace with the install, the build and the full suite"
 
   report-red:
     needs: full
