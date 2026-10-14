@@ -58,8 +58,9 @@ const QUEUE_CSS = `
 .mq-runners-head .q { letter-spacing: 0; text-transform: none; font-size: 12px; }
 .mq-runners-head .q.many { color: var(--mq-amber); }
 .mq-lanes { display: grid; gap: 6px; }
-.mq-wait { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; padding: 6px; border: 1px dashed var(--mq-line); border-radius: 10px; margin-bottom: 12px; align-items: center; }
-.mq-wait-none { color: var(--mq-soft); font-size: 12px; padding: 0 6px; }
+.mq-wait { position: relative; display: flex; flex-wrap: wrap; gap: 6px; min-height: 42px; padding: 8px; border: 1px dashed var(--mq-line); border-radius: 10px; margin-bottom: 12px; align-items: center; align-content: center; }
+.mq-wait-none { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--mq-soft); font-size: 12px; pointer-events: none; transition: opacity .3s ease; }
+.mq-wjob.leaving { position: absolute; transition: opacity .4s ease; }
 .mq-wjob { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mq-soft); transition: transform .9s cubic-bezier(.3,.7,.2,1), opacity .4s ease; }
 .mq-wjob em { font-style: normal; }
 .lanes-head { margin-top: 2px; }
@@ -239,10 +240,31 @@ const QUEUE_JS = `
     var q = box.querySelector('.q');
     q.textContent = n ? n + ' job' + (n === 1 ? '' : 's') + ' waiting for a free runner' : 'no job waiting';
     q.className = 'q' + (n > state.runners.length ? ' many' : '');
-    var keep = {};
-    Array.prototype.forEach.call(wait.querySelectorAll('[data-key]'), function (el) { keep[el.dataset.key] = el; });
-    wait.innerHTML = '';
-    if (!waiting.length) { var none = document.createElement('span'); none.className = 'mq-wait-none'; none.textContent = n ? n + ' queued' : 'empty'; wait.appendChild(none); }
+    // FLIP: a job that stays slides from where it was to where it is now;
+    // a new one flies in from its pull request; one that left fades where
+    // it stood, so nothing in the line jumps.
+    var keep = {}, wasAt = {};
+    Array.prototype.forEach.call(wait.querySelectorAll('.mq-wjob'), function (el) {
+      if (el.classList.contains('leaving')) { el.parentNode.removeChild(el); return; }
+      keep[el.dataset.key] = el; wasAt[el.dataset.key] = el.getBoundingClientRect();
+    });
+    var none = wait.querySelector('.mq-wait-none');
+    none.textContent = n ? n + ' queued' : 'empty';
+    none.style.opacity = waiting.length ? 0 : 1;
+    var want = {};
+    waiting.forEach(function (job) { var p = pillFor(job, batchNo); want[p.text + ' ' + job.name] = true; });
+    var wr = wait.getBoundingClientRect();
+    Object.keys(keep).forEach(function (key) {
+      if (want[key]) return;
+      var el = keep[key], r = wasAt[key];
+      el.classList.add('leaving');
+      el.style.left = (r.left - wr.left) + 'px'; el.style.top = (r.top - wr.top) + 'px';
+      // a job a runner took is drawn by the lane's pill from here on
+      el.style.opacity = 0;
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 450);
+      delete keep[key];
+    });
+    var fresh = [];
     waiting.forEach(function (job) {
       var p = pillFor(job, batchNo), key = p.text + ' ' + job.name;
       var el = keep[key];
@@ -250,11 +272,20 @@ const QUEUE_JS = `
         el = document.createElement('span'); el.dataset.key = key;
         el.innerHTML = '<span></span><em></em>';
         el.className = 'mq-wjob';
+        fresh.push([el, job, p]);
       }
       el.firstChild.className = p.cls; el.firstChild.textContent = p.text; el.lastChild.textContent = job.name;
       wait.appendChild(el);
-      if (!keep[key]) self.fly(el, srcOf(job, p));
     });
+    Object.keys(keep).forEach(function (key) {
+      var el = keep[key], a = wasAt[key], b = el.getBoundingClientRect();
+      if (!a || (a.left === b.left && a.top === b.top)) return;
+      el.style.transition = 'none';
+      el.style.transform = 'translate(' + Math.round(a.left - b.left) + 'px,' + Math.round(a.top - b.top) + 'px)';
+      void el.offsetWidth;
+      el.style.transition = ''; el.style.transform = '';
+    });
+    fresh.forEach(function (f) { self.fly(f[0], srcOf(f[1], f[2])); });
     var lanes = box.querySelector('.mq-lanes'), have = {}, working = {}, batchColor = null;
     Array.prototype.forEach.call(lanes.children, function (el) { have[el.dataset.name] = el; });
     state.runners.forEach(function (r, i) {
@@ -349,7 +380,7 @@ function renderQueue(state, opts) {
 <div class="mq-head"><div class="mq-title">Merge queue</div><div class="mq-tag">${esc(o.tagline || 'Testing only what each change touched.')}</div></div>
 <div class="mq-cols"><div>Open</div><div style="text-align:center">Batch</div><div style="text-align:right">Main</div></div>
 <div class="mq-stage"></div>
-<div class="mq-runners"><div class="mq-runners-head"><span>Waiting for a runner</span><span class="q"></span></div><div class="mq-wait"></div><div class="mq-runners-head lanes-head"><span>Runners</span></div><div class="mq-lanes"></div></div>
+<div class="mq-runners"><div class="mq-runners-head"><span>Waiting for a runner</span><span class="q"></span></div><div class="mq-wait"><span class="mq-wait-none"></span></div><div class="mq-runners-head lanes-head"><span>Runners</span></div><div class="mq-lanes"></div></div>
 <div class="mq-foot" aria-live="polite"></div>
 <div class="mq-tip" role="tooltip"></div>
 <script type="application/json">${json}</script>
