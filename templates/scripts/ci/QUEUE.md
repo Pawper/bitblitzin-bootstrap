@@ -79,6 +79,8 @@ A pull request that adds a migration merges only after the migration has run. Th
 
 The serial queue merges a green pull request without a second CI run when main moved only outside its classes, and updates it for a re-run when main moved inside them. Some classes can never make CI red: `docs`, `specs` and `status`, named on the `!rerun-free` line of `classes.txt`. The queue ignores them on main's side. Without that, ten pull requests that each named a spec invalidated one another on every merge and went round CI one at a time, which is what this file exists to prevent. If your project has another class whose moves are harmless, add it to that line.
 
+A green pull request that merges cleanly onto main also merges without a second run when main moved in its classes, as long as main's newest run, on main's current commit, is green. The full run on main is the gate, as the rules say, and it opens the red-main issue if the two together fail. The re-run is kept only when main is red or its newest commit has not finished its run. One batch went through three full CI cycles for the same code under the old rule. `QUEUE_RERUN=classes` restores it: re-run whenever main moved in the pull request's classes.
+
 ## When to go serial
 
 By choice, for a change that must land alone: a migration, a change to the deploy, anything whose failure you want to see on its own. Say so:

@@ -900,6 +900,14 @@ eq "split keeps the rest of the brief" "1" "$(sed -n 4p "$dd.out")"
 eq "split numbers decisions by file" "decision docs/decisions/*.md" "$(sed -n 5p "$dd.out")"
 eq "list reads them back" "| D2 | 2026-10-02 | Second thing. |" "$(sed -n 6p "$dd.out")"
 
+printf '\n# when a green pull request needs a second run\n'
+eq "main moved outside its classes: merge" "merge" "$(rerun_decision no red)"
+eq "main moved in its classes and main is green: merge, main's run is the gate" "merge" "$(rerun_decision yes green)"
+eq "main is red: re-run" "update" "$(rerun_decision yes red)"
+eq "main's newest commit has not finished its run: re-run" "update" "$(rerun_decision yes pending)"
+eq "main unreadable: re-run" "update" "$(rerun_decision yes unknown)"
+eq "the old rule on request" "update" "$(rerun_decision yes green classes)"
+
 printf '\n# labels over REST, and waiting on a machine\n'
 eq "the state label replaces the old one and keeps the rest" '{"labels":["bug","task","state:in-progress"]}' "$(state_labels_json 'bug
 state:ready
