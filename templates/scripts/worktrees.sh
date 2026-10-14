@@ -47,6 +47,7 @@ done
 
 default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo main)
 default_local=${default#origin/}
+step="listing worktrees"
 pairs=$(worktree_branches "$(git worktree list --porcelain)")
 count=$(printf '%s\n' "$pairs" | sed '/^$/d' | wc -l | tr -d ' ')
 
@@ -61,6 +62,7 @@ fi
 # it was just created and has no work yet, and a fresh worktree must never
 # be pruned, so a branch with nothing in its history beyond its creation
 # does not count.
+step="reading which branches merged"
 gh_merged=$(pr_ends "$ends" merged)
 git_merged=$(git branch --merged "$default" --format='%(refname:short)' 2>/dev/null | while IFS= read -r b; do
   [ -n "$b" ] || continue
@@ -70,7 +72,7 @@ $gh_merged
 $b
 "*) continue ;; esac
   moves=$(git reflog show --format=%h "refs/heads/$b" 2>/dev/null | wc -l | tr -d ' ')
-  [ "${moves:-0}" -gt 1 ] && printf '%s\n' "$b"
+  if [ "${moves:-0}" -gt 1 ]; then printf '%s\n' "$b"; fi
 done)
 merged="$gh_merged
 $git_merged"
@@ -128,7 +130,7 @@ case "$cmd" in
     d=$(detached_worktrees "$pairs" | sed '/^$/d' | wc -l | tr -d ' ')
     echo "$count worktrees besides the main checkout: $m of merged branches, $c of closed pull requests, $d detached."
     worktree_places "$pairs" | awk -F'\t' '{ printf "  %s in %s\n", $1, $2 }'
-    [ $((m + c + d)) -gt 0 ] && echo "Run: sh scripts/worktrees.sh audit   to name them, then prune."
+    [ $((m + c + d)) -eq 0 ] || echo "Run: sh scripts/worktrees.sh audit   to name them, then prune."
     exit 0
     ;;
   audit)
@@ -168,8 +170,9 @@ $closed_heads" '
   close)
     [ -n "$pr" ] && [ -n "$reason" ] || { echo 'Usage: sh scripts/worktrees.sh close PR "why, or what replaced it"' >&2; exit 2; }
     step="reading pull request $pr"
-    branch=$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq .head.ref)
-    [ -n "$branch" ] || { echo "Could not read pull request $pr from GitHub." >&2; exit 1; }
+    info=$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq '[.head.ref, .state, (.merged | tostring)] | @tsv' 2>/dev/null || true)
+    [ -n "$info" ] || { echo "Could not read pull request $pr from GitHub." >&2; exit 1; }
+    branch=$(printf '%s' "$info" | cut -f1); state=$(printf '%s' "$info" | cut -f2); merged_pr=$(printf '%s' "$info" | cut -f3)
     step="finding its worktree"
     path=$(worktree_for_branch "$pairs" "$branch")
     if [ -n "$path" ] && ! is_clean "$path"; then
@@ -177,12 +180,20 @@ $closed_heads" '
       exit 1
     fi
     step="commenting and closing $pr"
-    gh api -X POST "repos/{owner}/{repo}/issues/$pr/comments" -f body="$reason" >/dev/null
-    gh api -X PATCH "repos/{owner}/{repo}/pulls/$pr" -f state=closed >/dev/null
-    echo "closed pull request $pr with its reason"
+    # Already closed by hand (or merged): say so, record the reason, and
+    # still give it its ending: tag the branch and remove the worktree.
+    gh api -X POST "repos/{owner}/{repo}/issues/$pr/comments" -f body="$reason" >/dev/null 2>&1 || echo "could not comment on $pr; the reason is not recorded there"
+    if [ "$merged_pr" = true ]; then
+      echo "pull request $pr is already merged; added the reason, tidying its worktree and branch"
+    elif [ "$state" = closed ]; then
+      echo "pull request $pr was already closed; added the reason, tidying its worktree and branch"
+    else
+      gh api -X PATCH "repos/{owner}/{repo}/pulls/$pr" -f state=closed >/dev/null
+      echo "closed pull request $pr with its reason"
+    fi
     step="removing its worktree and branch"
     if [ -n "$path" ]; then remove_one "$path" && echo "removed $path" || echo "could not remove $path; run prune later"; fi
-    drop_branch "$branch" closed
+    if [ "$merged_pr" = true ]; then drop_branch "$branch" merged; else drop_branch "$branch" closed; fi
     ;;
   *)
     echo 'Usage: sh scripts/worktrees.sh list | audit [--days N] | prune [--apply] [--closed] [--branches] [--branch NAME] | close PR "reason"' >&2

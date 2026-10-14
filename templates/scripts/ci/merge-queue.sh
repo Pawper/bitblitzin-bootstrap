@@ -604,7 +604,7 @@ if [ "$mode" = drain ]; then
     done
     # Open batches: their members are theirs, not the drain's. A batch one of
     # whose members has landed on its own no longer matches main; close it.
-    members=""
+    members=""; settled=""
     for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null); do
       bm=$(batch_members "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq '.body // ""' 2>/dev/null)")
       landed=""
@@ -615,19 +615,22 @@ if [ "$mode" = drain ]; then
       if [ -n "$landed" ]; then
         gh api -X POST "repos/{owner}/{repo}/issues/$bp/comments" -f body="Closed by the queue: member(s)$landed landed on their own, so this batch no longer matches main. The rest are queued again on their own." >/dev/null 2>&1 || true
         gh api -X PATCH "repos/{owner}/{repo}/pulls/$bp" -f state=closed >/dev/null 2>&1 && say "round $round: closed batch #$bp, since$landed landed on their own."
+        settled="$settled $bp $(printf '%s' "$landed" | tr -d '#')"
       elif [ "$bstate" = passed ] && bsha=$(gh api -X PUT "repos/{owner}/{repo}/pulls/$bp/merge" -f merge_method=merge --jq .sha 2>/dev/null); then
         say "round $round: merged batch #$bp, left green by an earlier run (members:$(printf ' #%s' $bm))."
+        settled="$settled $bp $bm"
         for m in $bm; do gh api -X POST "repos/{owner}/{repo}/issues/$m/comments" -f body="Merged into $base in batch #$bp (commit $bsha), with its history kept. GitHub may show this pull request as closed rather than merged; its changes are on $base." >/dev/null 2>&1 || true; done
       elif [ "$bstate" = failed ]; then
         gh api -X POST "repos/{owner}/{repo}/issues/$bp/comments" -f body="Closed by the queue: left open by an earlier run with its required check failed. Its members are queued again on their own." >/dev/null 2>&1 || true
         gh api -X PATCH "repos/{owner}/{repo}/pulls/$bp" -f state=closed >/dev/null 2>&1 && say "round $round: closed batch #$bp, whose required check failed; its members are queued again."
+        settled="$settled $bp"
       else
         # Still running: its members wait with it rather than race it.
         members="$members $bm $bp"
         say "round $round: batch #$bp is still running CI; its members$(printf ' #%s' $bm) wait for it."
       fi
     done
-    listed=$(drop_members "$listed" "$members")
+    listed=$(drop_members "$listed" "$members $settled")
     open=$(printf '%s\n' "$listed" | while IFS="$tab" read -r o_num o_draft o_sha o_base; do
       [ -n "$o_num" ] || continue
       printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$(mergeable_word "$(pr_field "$o_num" 5)")" "$(pr_rollup "$o_sha")" "$o_base"
@@ -839,6 +842,13 @@ refs=""
 dropped=""
 good=$(git -C "$wt" rev-parse HEAD)
 for pr in $prs; do
+  # Read fresh, not from the cache: a pull request merged or closed since
+  # the list was made has nothing left to merge.
+  pst=$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq '"\(.state) \(.merged)"' 2>/dev/null || true)
+  case "$pst" in
+    "closed true") batch_line "$pr" "skipped" "already merged"; continue ;;
+    closed*) batch_line "$pr" "skipped" "closed"; continue ;;
+  esac
   why=$(folder_blocks "$pr"); [ -n "$why" ] || why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; continue; fi
   git -C "$wt" fetch -q origin "pull/$pr/head" || { batch_line "$pr" "dropped" "could not fetch it"; dropped="$dropped $pr"; continue; }

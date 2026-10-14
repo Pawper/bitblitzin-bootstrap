@@ -56,6 +56,17 @@ dl { margin: 0; }
 dt { font-weight: 600; margin-top: 12px; }
 dd { margin: 2px 0 0; color: var(--ink); }
 .unbuilt { color: var(--partly); }
+.say { margin: 0 0 16px; padding-left: 20px; color: var(--partly); }
+.number .value { font-size: 22px; font-weight: 600; }
+.number .label { color: var(--soft); font-size: 13px; }
+.number .note { color: var(--soft); font-size: 12px; margin-top: 4px; }
+.delivery-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; align-items: start; }
+@media (min-width: 900px) { .delivery-grid { grid-template-columns: 1fr 1fr; } .queue-wrap { grid-column: 1 / -1; } }
+.bars { display: grid; gap: 6px; margin-top: 6px; }
+.bar { display: grid; grid-template-columns: minmax(80px, 1fr) 2fr 32px; gap: 8px; align-items: center; font-size: 13px; }
+.bar .track { background: var(--line); border-radius: 3px; height: 8px; overflow: hidden; }
+.bar .track i { display: block; height: 100%; background: var(--link); }
+.bar .v { text-align: right; color: var(--soft); }
 .numbers { display: flex; gap: 16px; flex-wrap: wrap; }
 .number { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 18px; min-width: 140px; }
 .number b { font-size: 22px; display: block; }
@@ -161,6 +172,42 @@ function renderNumbers(view) {
   return `<h2 id="numbers">Live numbers</h2>\n${body}`;
 }
 
+// renderDelivery(SUMMARY, QUEUE_STATE): how work moves through the
+// project, from delivery.js. Plain lines first when something got worse,
+// then the numbers, then the queue as a picture.
+function renderDelivery(d, queueState) {
+  if (!d) return '';
+  const { minutes } = require('./delivery');
+  const { renderQueue } = require('./queue-view');
+  const tile = (label, value, note) => `<div class="number"><div class="value">${esc(value)}</div><div class="label">${esc(label)}</div>${note ? `<div class="note">${esc(note)}</div>` : ''}</div>`;
+  const trendWord = { slower: 'slower than the week before', faster: 'faster than the week before', steady: 'about the same as the week before' };
+  const bars = (counts, empty) => {
+    const rows = Object.entries(counts || {}).sort((a, b) => b[1] - a[1]);
+    if (!rows.length) return `<p class="note">${esc(empty)}</p>`;
+    const max = rows[0][1];
+    return '<div class="bars">' + rows.map(([k, v]) => `<div class="bar"><span class="k">${esc(k)}</span><span class="track"><i style="width:${Math.max(4, Math.round(100 * v / max))}%"></i></span><span class="v">${v}</span></div>`).join('') + '</div>';
+  };
+  const say = d.say.length ? `<ul class="say">${d.say.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>` : '<p class="lede">Nothing got worse in the last two weeks.</p>';
+  const r = d.runner;
+  const tiles = [
+    tile('from push to a CI result, a pull request', minutes(d.ci.median), d.ci.count ? `slowest tenth ${minutes(d.ci.slow)}; ${d.ci.trend ? trendWord[d.ci.trend] : `${d.ci.count} runs`}` : 'no pull request runs yet'),
+    tile('of job time spent waiting for a runner', r.share == null ? 'no data' : `${Math.round(r.share * 100)}%`, r.sampled ? `${r.jobsPerRun} jobs a run, from the last ${r.sampled} runs` : ''),
+    tile('from opened to merged', minutes(d.merges.median), `${d.merges.count} merged; ${d.merges.perDay.toFixed(1)} a day`),
+    tile('main red', d.main.redNow ? `now, ${minutes(d.main.redFor)}` : `${d.main.spells} time${d.main.spells === 1 ? '' : 's'}`, d.main.longest ? `longest ${minutes(d.main.longest)}; ${d.main.runs} runs on main` : `${d.main.runs} runs on main`),
+    tile('runners online', r.total == null ? 'no data' : `${r.online} of ${r.total}`, r.total == null ? 'listing runners needs an admin token' : `${r.busy} busy now`),
+  ].join('');
+  return `<h2 id="delivery">Delivery</h2>
+<p class="lede">How work moves through this project over the last ${d.windowDays} days, from what GitHub already records and the files the plugin keeps on this machine. Nothing is sent anywhere.</p>
+${say}
+<div class="numbers">${tiles}</div>
+<div class="delivery-grid">
+<div class="card"><h3>Merges</h3><p class="note">${d.queue.batches} batch${d.queue.batches === 1 ? '' : 'es'} and ${d.queue.serial} serial merge${d.queue.serial === 1 ? '' : 's'}; serial reasons:</p>${bars(d.queue.reasons, 'No serial merges.')}${d.queue.flaky ? `<p class="note">${d.queue.flaky} test result(s) on record for unreliable tests.</p>` : ''}</div>
+<div class="card"><h3>Commands the hooks refused</h3>${bars(d.hooks, 'None on record. The hooks write one line per refusal to .scratch/hooks.log in this project.')}</div>
+<div class="queue-wrap">${queueState ? renderQueue(queueState, { poll: 'queue.json', every: 30000 }) : ''}</div>
+</div>
+${d.read.length ? `<p class="note">${d.read.map(esc).join(' ')}</p>` : ''}`;
+}
+
 function renderPage(view) {
   const cards = view.systems.map(renderCard).join('\n');
   return `<!doctype html>
@@ -169,13 +216,13 @@ function renderPage(view) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(view.project)} console</title>
-<style>${CSS}</style>
+<style>${CSS}${view.delivery ? require('./queue-view').QUEUE_CSS : ''}</style>
 </head>
 <body>
 <main>
 <h1>${esc(view.project)}</h1>
 <p class="lede">What this project talks to, what state each system is in, and how to do the routine things. Built from the project's configuration, not written by hand.</p>
-<nav><a href="#todo">Launch to-do</a><a href="#services">Services</a><a href="#faq">FAQ</a>${view.numbers && view.numbers.items && view.numbers.items.length ? '<a href="#numbers">Live numbers</a>' : ''}</nav>
+<nav><a href="#todo">Launch to-do</a><a href="#services">Services</a><a href="#faq">FAQ</a>${view.delivery ? '<a href="#delivery">Delivery</a>' : ''}${view.numbers && view.numbers.items && view.numbers.items.length ? '<a href="#numbers">Live numbers</a>' : ''}</nav>
 
 <h2 id="todo">Launch to-do</h2>
 ${renderTodo(view.todo)}
@@ -195,13 +242,16 @@ ${renderMap(view)}
 ${renderFaqGroup('How do I', view.faq.how)}
 ${renderFaqGroup('What happens when', view.faq.when)}
 
+${renderDelivery(view.delivery, view.queue)}
+
 ${renderNumbers(view)}
 
 <footer>Generated from the console configuration. To change a card, a to-do item or an answer, change the configuration and reload.</footer>
 </main>
+${view.delivery ? `<script>${require('./queue-view').QUEUE_JS}</script>` : ''}
 </body>
 </html>
 `;
 }
 
-module.exports = { renderPage, renderMap, renderCard, renderTodo, renderFaqGroup, renderNumbers, esc };
+module.exports = { renderPage, renderDelivery, renderMap, renderCard, renderTodo, renderFaqGroup, renderNumbers, esc };

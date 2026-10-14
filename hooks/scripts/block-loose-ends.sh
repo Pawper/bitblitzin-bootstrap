@@ -6,6 +6,7 @@
 #     reachable only from that folder; always create a branch.
 here=$(dirname "$0")
 . "$here/lib.sh"
+. "$here/refusal-log.sh"
 . "$here/worktree-lib.sh"
 
 input=$(cat)

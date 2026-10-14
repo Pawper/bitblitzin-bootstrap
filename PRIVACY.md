@@ -6,9 +6,11 @@ This plugin collects nothing. It has no server, no account, no analytics and no 
 
 Everything runs on your machine, inside your Claude Code session or your own terminal.
 
-- **The hooks** read the tool call Claude is about to make (a command, a file path, an agent dispatch) to decide whether to refuse it. They print one sentence back into the session and keep nothing.
+- **The hooks** read the tool call Claude is about to make (a command, a file path, an agent dispatch) to decide whether to refuse it. They print one sentence back into the session; a refusal also adds one line to the hook log below.
 - **The session brief and the drive's plan** read your repository with `git` and your project's pull requests and issues with the GitHub CLI, using the GitHub sign-in you already have. The result is printed into your session. The plugin stores none of it.
 - **The owner console** reads `console/services.json` and checks which settings are present in your environment and your `.env` file. It reads only whether a setting is set, never its value, and it never prints a variable name or a value on the page. The local mount serves the page on your own machine only.
+- **The hook log.** When a hook refuses a command, it adds one line to `.scratch/hooks.log` inside your project: the time and the hook's name, never the command. The owner console counts these lines. The file stays in the project's ignored scratch folder on your machine; `HOOK_LOG=0` turns it off.
+- **The console's Delivery section** reads your project's CI runs, pull requests and main's history from GitHub with your own sign-in, and the queue and hook logs on your machine, to show how work moves. It keeps the reads in memory for a few minutes and writes nothing.
 - **The board, sync, audit and merge queue scripts** call GitHub through the GitHub CLI or GitHub Actions with your own credentials, to do what their names say on your own repository.
 
 ## What leaves your machine

@@ -6,6 +6,7 @@
 # effort level, which this hook reports so the dispatcher can see it.
 here=$(dirname "$0")
 . "$here/lib.sh"
+. "$here/refusal-log.sh"
 
 input=$(cat)
 tool=$(json_field "$input" tool_name)

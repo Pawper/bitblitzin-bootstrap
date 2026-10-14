@@ -8,6 +8,7 @@
 # just STATUS.md.
 here=$(dirname "$0")
 . "$here/lib.sh"
+. "$here/refusal-log.sh"
 
 input=$(cat)
 path=$(json_field "$input" file_path)
