@@ -16,7 +16,7 @@ function esc(s) {
 
 const QUEUE_CSS = `
 .mq { --mq-bg: #1b1f1c; --mq-panel: #262b26; --mq-chip: #1a1c22; --mq-ink: #eef2ee; --mq-soft: #9aa59c;
-  --mq-line: #3a423b; --mq-green: #4ade9a; --mq-amber: #e8b04b; --mq-red: #f06292; --mq-grey: #7c847e; --mq-cyan: #38c8f0;
+  --mq-line: #3a423b; --mq-green: #4ade9a; --mq-amber: #e8b04b; --mq-red: #f06292; --mq-main-red: #ef4444; --mq-grey: #7c847e; --mq-cyan: #38c8f0;
   position: relative; background: linear-gradient(180deg, var(--mq-panel), var(--mq-bg)); color: var(--mq-ink);
   border: 1px solid var(--mq-line); border-radius: 22px; padding: 18px 18px 22px; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
   width: 100%; max-width: 520px; box-sizing: border-box; overflow: visible; }
@@ -91,6 +91,16 @@ const QUEUE_CSS = `
 .mq-pill.main { border-color: var(--mq-amber); color: var(--mq-amber); }
 .mq-chip.working { box-shadow: 0 0 0 1.5px var(--lane, var(--mq-cyan)), 0 0 12px var(--lane, var(--mq-cyan)); }
 .mq-box.working { border-color: var(--lane, var(--mq-cyan)); box-shadow: 0 0 22px var(--lane, var(--mq-cyan)); }
+.mq-chip { z-index: 2; }
+.mq-clash { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
+.mq-clash line { stroke-width: 2; stroke-linecap: round; stroke-dasharray: 6 5; animation: mq-draw .7s ease-out both, mq-march 1s linear .7s infinite; }
+.mq-clash line.pr { stroke: var(--mq-red); }
+.mq-clash line.main { stroke: var(--mq-main-red); }
+.mq-clash circle { fill: var(--mq-main-red); }
+@keyframes mq-draw { from { opacity: 0; } to { opacity: .9; } }
+@keyframes mq-march { to { stroke-dashoffset: -22; } }
+.mq-chip[data-state=mainconflict] { border-color: var(--mq-main-red); box-shadow: 0 0 10px rgba(239,68,68,.35); }
+.mq-chip[data-state=mainconflict] .mq-dot { background: var(--mq-main-red); border-radius: 2px; transform: rotate(45deg); }
 .mq-chip[data-state=conflict] { border-color: var(--mq-red); }
 .mq-chip[data-state=conflict] .mq-dot { background: var(--mq-red); border-radius: 2px; transform: rotate(45deg); }
 .mq-lane.busy .job { color: var(--mq-ink); }
@@ -106,7 +116,7 @@ const QUEUE_CSS = `
 const QUEUE_JS = `
 (function () {
   var STATE_WORDS = { green: 'CI green; ready to merge', pending: 'CI running', red: 'CI failed', cancelled: 'CI cancelled; will re-run',
-    none: 'no checks yet', draft: 'draft; not queued', conflict: 'conflicts; the queue told its owner', merged: 'landed on main', batch: 'in the batch' };
+    none: 'no checks yet', draft: 'draft; not queued', conflict: 'conflicts with another pull request; the queue told its owner', mainconflict: 'conflicts with main; not eligible for a batch until its owner merges main in and fixes it', merged: 'landed on main', batch: 'in the batch' };
   function ago(iso) {
     if (!iso) return '';
     var m = Math.round((Date.now() - Date.parse(iso)) / 60000);
@@ -130,6 +140,8 @@ const QUEUE_JS = `
     this.box.appendChild(this.empty);
     this.line = document.createElement('div'); this.line.className = 'mq-line';
     this.stage.appendChild(this.box); this.stage.appendChild(this.line);
+    this.clash = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); this.clash.setAttribute('class', 'mq-clash');
+    this.stage.appendChild(this.clash);
     this.lastMain = null;
     var self = this;
     window.addEventListener('resize', function () { if (self.state) self.draw(self.state); });
@@ -180,8 +192,10 @@ const QUEUE_JS = `
     this.state = state;
     var w = this.stage.clientWidth, col = [w * 0.17, w * 0.5, w * 0.85], row = 50, top = 8, self = this;
     Object.keys(this.chips).forEach(function (k) { self.chips[k]._seen = false; });
+    var at = {};
     var place = function (el, cx, y) {
       var cw = el.offsetWidth || 70;
+      at[el._pr.number] = { x: cx, y: y + el.offsetHeight / 2, w: cw };
       el.style.transform = 'translate(' + Math.round(cx - cw / 2) + 'px,' + Math.round(y) + 'px)';
       el.style.opacity = '';
     };
@@ -206,6 +220,24 @@ const QUEUE_JS = `
     this.bar.querySelector('i').style.width = fill + '%';
     this.bar.className = 'mq-bar' + (batch && batch.state === 'red' ? ' red' : batch && batch.state === 'green' ? ' green' : '');
     this.line.style.left = col[2] + 'px';
+    // A red line for each clash: pull request to pull request, pink; to
+    // main, red. Drawn where the chips are going, so it lands with them.
+    var svg = this.clash, NS = 'http://www.w3.org/2000/svg', drawn = {};
+    Array.prototype.forEach.call(svg.querySelectorAll('line'), function (l) { drawn[l.dataset.key] = l; });
+    var want = {};
+    (state.clashes || []).forEach(function (c) {
+      var a = at[c[0]]; if (!a) return;
+      var toMain = c[1] === 'main', b = toMain ? { x: col[2], y: a.y, w: 0 } : at[c[1]];
+      if (!b) return;
+      var key = c[0] + '-' + c[1]; want[key] = true;
+      var dir = b.x >= a.x ? 1 : -1;
+      var x1 = a.x + dir * a.w / 2, x2 = b.x - dir * b.w / 2;
+      var l = drawn[key];
+      if (!l) { l = document.createElementNS(NS, 'line'); l.dataset.key = key; svg.appendChild(l); }
+      l.setAttribute('class', toMain ? 'main' : 'pr');
+      l.setAttribute('x1', x1); l.setAttribute('y1', a.y); l.setAttribute('x2', x2); l.setAttribute('y2', b.y);
+    });
+    Object.keys(drawn).forEach(function (k) { if (!want[k]) svg.removeChild(drawn[k]); });
     var headMain = main.length ? main[0].number : null;
     if (this.lastMain != null && headMain !== this.lastMain) { this.line.classList.remove('pulse'); void this.line.offsetWidth; this.line.classList.add('pulse'); }
     this.lastMain = headMain;
@@ -378,13 +410,17 @@ function queueState(view) {
     main: view.main,
     runners: view.runners || null,
     waiting: view.waiting || null,
+    clashes: [
+      ...(view.clashes || []).filter((c) => view.open.some((p) => p.number === c[0])),
+      ...view.open.filter((p) => p.state === 'mainconflict').map((p) => [p.number, 'main']),
+    ],
     queued: view.queued == null ? null : view.queued,
     note: note.join(' '),
   };
 }
 
 function pick(p) {
-  return { number: p.number, title: p.title, author: p.author, head: p.head, created: p.created, state: p.state, summary: p.summary, jobsDone: p.jobsDone, jobsTotal: p.jobsTotal };
+  return { number: p.number, title: p.title, author: p.author, head: p.head, created: p.created, state: p.state, conflict: p.conflict, summary: p.summary, jobsDone: p.jobsDone, jobsTotal: p.jobsTotal };
 }
 
 // renderQueue(STATE, {poll, demo, tagline}): the panel's markup, with its
@@ -404,8 +440,9 @@ function renderQueue(state, opts) {
 </div>`;
 }
 
-// The scripted queue for demoPage. Five pull requests; four are green,
-// and #255 conflicts with #252. The batch takes the earliest and the most
+// The scripted queue for demoPage. Six pull requests; four are green,
+// #255 conflicts with #252 (pink: a clash with another pull request), and
+// #257 conflicts with main (red: never eligible until its owner fixes it). The batch takes the earliest and the most
 // that fit beside it, leaves #255 out and tells its owner which files;
 // two runners in their own colours take jobs from one waiting line.
 function demoFrames() {
@@ -415,9 +452,12 @@ function demoFrames() {
     253: ['Cache the search results', 'sam', 'search-cache'],
     254: ['Plain words on the empty cart', 'ada', 'empty-cart-copy'],
     255: ['Show the date picker in the cart', 'kit', 'cart-datepicker'],
+    257: ['Rename the cart route', 'sam', 'cart-route'],
   };
   const P = (n, state, extra) => ({ number: n, title: t[n][0], author: t[n][1], head: t[n][2], state, created: null, ...(extra || {}) });
   const C255 = P(255, 'conflict', { conflict: 'Conflicts with #252 in src/ui/DatePicker.tsx. The queue commented the files on it and labeled it blocked; its owner merges main in and fixes them.' });
+  const M257 = P(257, 'mainconflict', { conflict: 'Conflicts with main in src/routes/cart.ts, which changed after it was opened. It is not eligible for a batch; the queue told its owner, who merges main in and fixes the file.' });
+  const M255 = P(255, 'mainconflict', { conflict: 'PR #252 landed, so its date picker change is on main now and this one conflicts with main. Its owner was told when the batch formed.' });
   const landed = (ns) => ns.map((n) => ({ number: n, title: n > 250 ? `${t[n][0]} (#${n})` : `Earlier work (#${n})`, at: null }));
   const B = (done, total, state) => ({ number: 256, state, done, total, members: [251, 252, 254].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
   const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name } : { pr, name, batch: pr === 256 });
@@ -427,22 +467,22 @@ function demoFrames() {
   const before = landed([250, 249, 248]);
   const after = landed([254, 252, 251, 250, 249, 248]);
   const frames = [
-    { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green')], batch: null, main: before,
-      ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. Jobs wait in one line for whichever runner frees first.' },
-    { open: [P(252, 'green', { checking: true }), P(253, 'pending'), P(254, 'green', { checking: true }), P(255, 'green', { checking: true })],
+    { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green'), M257], batch: null, main: before, clashes: [[257, 'main']],
+      ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. #257 conflicts with main, so it is not eligible for a batch at all.' },
+    { open: [P(252, 'green', { checking: true }), P(253, 'pending'), P(254, 'green', { checking: true }), P(255, 'green', { checking: true }), M257], clashes: [[257, 'main']],
       batch: { number: null, forming: true, state: 'none', done: 0, total: 0, members: [P(251, 'green', { anchor: true })] }, main: before,
       ...R([253, 'app'], null, []), note: '#251 is the earliest, so it anchors the batch. The other green ones are test-merged against it and each other, in memory; no runner is needed for that.' },
-    { open: [P(253, 'pending'), C255], batch: B(0, 3, 'pending'), main: before,
+    { open: [P(253, 'pending'), C255, M257], batch: B(0, 3, 'pending'), main: before, clashes: [[255, 252], [257, 'main']],
       ...R([253, 'app'], null, [[256, 'checks'], [256, 'app']]), note: 'The batch takes #251 first, then the most that fit beside it. #255 conflicts with #252, so it waits, and its owner is told which files.' },
-    { open: [P(253, 'pending'), C255], batch: B(1, 3, 'pending'), main: before,
+    { open: [P(253, 'pending'), C255, M257], batch: B(1, 3, 'pending'), main: before, clashes: [[255, 252], [257, 'main']],
       ...R([253, 'app'], [256, 'checks'], [[256, 'app']]), note: 'The batch\'s jobs queue like anyone else\'s; a free runner takes the next in line.' },
-    { open: [P(253, 'green'), C255], batch: B(2, 3, 'pending'), main: before,
+    { open: [P(253, 'green'), C255, M257], batch: B(2, 3, 'pending'), main: before, clashes: [[255, 252], [257, 'main']],
       ...R([256, 'app'], [256, 'CI passed'], []), note: '#253 is green now. Both runners are on the batch.' },
-    { open: [P(253, 'green'), C255], batch: B(3, 3, 'green'), main: before,
+    { open: [P(253, 'green'), C255, M257], batch: B(3, 3, 'green'), main: before, clashes: [[255, 252], [257, 'main']],
       ...R(null, null, []), note: 'The batch is green: three pull requests tested once, together.' },
-    { open: [P(253, 'green'), C255], batch: null, main: after,
-      ...R(['main', 'full'], null, []), note: 'All three land on main in one merge, and main runs its full suite once.' },
-    { open: [P(253, 'green'), P(255, 'pending')], batch: null, main: after,
+    { open: [P(253, 'green'), M255, M257], batch: null, main: after, clashes: [[255, 'main'], [257, 'main']],
+      ...R(['main', 'full'], null, []), note: 'All three land on main in one merge. #252 is on main now, so #255 conflicts with main: red, not pink.' },
+    { open: [P(253, 'green'), P(255, 'pending'), M257], batch: null, main: after, clashes: [[257, 'main']],
       ...R([255, 'checks'], ['main', 'full'], [[255, 'app']]), note: '#255\'s owner merged main in and fixed the file; it is being tested again.' },
   ];
   return frames.map((f) => ({ ...f, note: prs(f.note), open: f.open.map((o) => (o.conflict ? { ...o, conflict: prs(o.conflict) } : o)) }));

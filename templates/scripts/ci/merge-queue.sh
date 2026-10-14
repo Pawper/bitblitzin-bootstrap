@@ -873,6 +873,7 @@ for a in $prs; do for b in $prs; do
 $a $b"
 done; done
 : > "$flaky_dir/now" 2>/dev/null || true
+: > "$flaky_dir/clashes" 2>/dev/null || true
 if [ -n "$pairs" ]; then
   group=$(anchored_group "$(printf '%s ' $prs)" "$pairs" | tr '\n' ' ')
   for pr in $prs; do
@@ -880,6 +881,7 @@ if [ -n "$pairs" ]; then
     with=$(printf '%s\n' "$pairs" | awk -v p="$pr" -v g=" $group " '$1 == p && index(g, " " $2 " ") { print $2; exit } $2 == p && index(g, " " $1 " ") { print $1; exit }')
     files=$(git -C "$wt" merge-tree --write-tree --name-only "refs/queue/pr-$pr" "refs/queue/pr-$with" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
     batch_line "$pr" "left for later" "conflicts with #$with, which goes in this batch"
+    printf '%s %s\n' "$pr" "$with" >> "$flaky_dir/clashes" 2>/dev/null || true
     notify_conflict "$pr" "$files" "$with"
   done
   prs=$group

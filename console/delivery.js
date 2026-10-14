@@ -235,7 +235,7 @@ function queueView(raw) {
   const landed = (raw.mainCommits || []).map((c) => ({ number: mergedNumber(c.message), title: c.message.split('\n')[0], at: c.date, serial: serialReason(c.message) }))
     .filter((c, i, all) => c.number != null && all.findIndex((x) => x.number === c.number) === i).slice(0, 6);
   const r = raw.runners ? runnerLanes(raw.runners, raw.activeJobs, open) : null;
-  return { open: waiting, batch, main: landed, checking: raw.checking || [], runners: r ? r.lanes : null, waiting: r ? r.waiting : null, queued: r ? r.queued : null };
+  return { open: waiting, batch, main: landed, checking: raw.checking || [], clashes: raw.clashes || [], runners: r ? r.lanes : null, waiting: r ? r.waiting : null, queued: r ? r.queued : null };
 }
 
 // ---------- reading (the one impure part)
@@ -286,13 +286,20 @@ async function gather(root, opts) {
     if (!open) raw.read.push('GitHub could not be read just now (signed out, offline or rate-limited).');
     raw.mainCommits = (commits || []).map((c) => ({ sha: c.sha, message: c.commit.message, date: c.commit.committer.date }));
     raw.open = await Promise.all((open || []).map(async (p) => {
-      const checks = await gh(root, [`repos/{owner}/{repo}/commits/${p.head.sha}/check-runs?per_page=100`]);
+      const [checks, one] = await Promise.all([
+        gh(root, [`repos/{owner}/{repo}/commits/${p.head.sha}/check-runs?per_page=100`]),
+        // mergeable_state is only on the single pull request; "dirty" is a
+        // conflict with its base
+        p.draft ? null : gh(root, [`repos/{owner}/{repo}/pulls/${p.number}`]),
+      ]);
+      const dirty = one && one.mergeable_state === 'dirty';
       const list = (checks && checks.check_runs) || [];
       const summary = list.find((c) => c.name === (process.env.QUEUE_SUMMARY_CHECK || 'CI passed'));
       return {
         number: p.number, title: p.title, author: p.user && p.user.login, draft: p.draft,
         head: p.head.ref, base: p.base.ref, created: p.created_at, url: p.html_url, body: p.body || '',
-        state: rollup(list),
+        state: dirty ? 'mainconflict' : rollup(list),
+        conflict: dirty ? `Conflicts with ${p.base.ref}; not eligible for a batch until its owner merges ${p.base.ref} in and fixes it.` : undefined,
         summary: summary ? (summary.status === 'completed' ? summary.conclusion : summary.status) : 'not run',
         jobsDone: list.filter((c) => c.status === 'completed').length,
         jobsTotal: list.length,
@@ -330,6 +337,8 @@ async function gather(root, opts) {
   // What the queue is doing now, from the file it keeps while it runs:
   // "checking 251 252 254" while it test-merges the batch's candidates.
   const now = readLines(path.join(root, '.scratch', 'queue', 'now'))[0] || '';
+  // The pairs the last batch left out: "LEFT_OUT WITH", one a line.
+  raw.clashes = readLines(path.join(root, '.scratch', 'queue', 'clashes')).map((l) => l.split(' ').map(Number)).filter((c) => c[0] && c[1]);
   raw.checking = /^checking /.test(now) ? now.split(' ').slice(1).map(Number).filter(Boolean) : [];
   raw.flaky = readLines(path.join(root, '.scratch', 'queue', 'flaky.tsv'));
   raw.hookLog = readLines(path.join(root, '.scratch', 'hooks.log')).map((l) => {

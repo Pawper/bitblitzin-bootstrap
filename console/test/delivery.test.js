@@ -145,6 +145,15 @@ test('pull requests the queue is test-merging gleam', () => {
   assert.match(notes, /PR #251 is the earliest/);
 });
 
+test('clashes: left-out pairs from the queue, and conflicts with main', () => {
+  const st = qv.queueState({ open: [{ number: 255, state: 'conflict' }, { number: 257, state: 'mainconflict' }], batch: null, main: [], clashes: [[255, 252], [999, 1]] });
+  assert.deepEqual(st.clashes, [[255, 252], [257, 'main']]);
+  const f = qv.demoFrames();
+  assert.ok(f.some((x) => (x.clashes || []).some((c) => c[1] === 'main')));
+  assert.ok(f.some((x) => (x.clashes || []).some((c) => c[0] === 255 && c[1] === 252)));
+  assert.ok(f.some((x) => x.open.some((p) => p.number === 255 && p.state === 'mainconflict')), 'once #252 lands, #255 conflicts with main');
+});
+
 test('the queue panel carries its data, safely', () => {
   const html = qv.renderQueue({ open: [{ number: 1, title: '</script><b>x' }], batch: null, main: [] }, { poll: 'queue.json' });
   assert.ok(html.includes('data-queue'));
