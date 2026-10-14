@@ -235,7 +235,7 @@ function queueView(raw) {
   const landed = (raw.mainCommits || []).map((c) => ({ number: mergedNumber(c.message), title: c.message.split('\n')[0], at: c.date, serial: serialReason(c.message) }))
     .filter((c, i, all) => c.number != null && all.findIndex((x) => x.number === c.number) === i).slice(0, 6);
   const r = raw.runners ? runnerLanes(raw.runners, raw.activeJobs, open) : null;
-  return { open: waiting, batch, main: landed, runners: r ? r.lanes : null, waiting: r ? r.waiting : null, queued: r ? r.queued : null };
+  return { open: waiting, batch, main: landed, checking: raw.checking || [], runners: r ? r.lanes : null, waiting: r ? r.waiting : null, queued: r ? r.queued : null };
 }
 
 // ---------- reading (the one impure part)
@@ -327,6 +327,10 @@ async function gather(root, opts) {
       jobLists.forEach((l, i) => ((l && l.jobs) || []).forEach((j) => raw.jobs.push({ ...j, run_id: sample[i].id })));
     }
   }
+  // What the queue is doing now, from the file it keeps while it runs:
+  // "checking 251 252 254" while it test-merges the batch's candidates.
+  const now = readLines(path.join(root, '.scratch', 'queue', 'now'))[0] || '';
+  raw.checking = /^checking /.test(now) ? now.split(' ').slice(1).map(Number).filter(Boolean) : [];
   raw.flaky = readLines(path.join(root, '.scratch', 'queue', 'flaky.tsv'));
   raw.hookLog = readLines(path.join(root, '.scratch', 'hooks.log')).map((l) => {
     const [at, hook] = l.split('\t');

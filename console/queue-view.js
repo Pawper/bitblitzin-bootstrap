@@ -47,6 +47,12 @@ const QUEUE_CSS = `
 .mq-chip[data-state=draft] { opacity: .6; }
 .mq-chip[data-state=merged] .mq-dot { background: var(--mq-green); }
 @keyframes mq-blink { 50% { opacity: .35; } }
+@property --mq-a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.mq-chip::before { content: ""; position: absolute; inset: -2px; border-radius: 12px; padding: 2px; opacity: 0; transition: opacity .4s ease; pointer-events: none;
+  background: conic-gradient(from var(--mq-a), transparent 0 62%, rgba(255,255,255,.9) 76%, var(--mq-cyan) 84%, transparent 96%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.mq-chip.checking::before { opacity: 1; animation: mq-gleam 1.4s linear infinite; }
+@keyframes mq-gleam { to { --mq-a: 360deg; } }
 .mq-tip { position: absolute; z-index: 5; pointer-events: none; min-width: 200px; max-width: 280px; background: #0f1113; color: var(--mq-ink);
   border: 1px solid var(--mq-line); border-radius: 10px; padding: 10px 12px; font-size: 12px; opacity: 0; transition: opacity .15s ease; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 .mq-tip.on { opacity: 1; }
@@ -88,7 +94,7 @@ const QUEUE_CSS = `
 .mq-foot { margin-top: 14px; color: var(--mq-soft); font-size: 12px; min-height: 1.4em; }
 .mq-empty { position: absolute; left: 0; right: 0; top: 40%; text-align: center; color: var(--mq-soft); font-size: 12px; padding: 0 10px; transition: opacity .4s ease; }
 .mq.still .mq-chip, .mq.still .mq-box { transition: none; }
-@media (prefers-reduced-motion: reduce) { .mq-chip, .mq-box, .mq-bar i { transition: none; } .mq-dot, .mq-line.pulse { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .mq-chip.checking::before { animation: none; background: var(--mq-cyan); } .mq-chip, .mq-box, .mq-bar i { transition: none; } .mq-dot, .mq-line.pulse { animation: none; } }
 `;
 
 // The browser side: draw(state) moves each chip to its column and row.
@@ -139,6 +145,7 @@ const QUEUE_JS = `
     el.querySelector('.mq-n').textContent = '#' + pr.number;
     el.classList.toggle('small', !!small);
     el.dataset.state = pr.state || 'none';
+    el.classList.toggle('checking', !!pr.checking);
     el._pr = pr;
     el._seen = true;
     return el;
@@ -150,6 +157,7 @@ const QUEUE_JS = `
     var b = document.createElement('b'); b.textContent = '#' + pr.number + '  ' + (pr.title || ''); t.appendChild(b);
     if (pr.author) lines.push('by ' + pr.author + (pr.created ? ', opened ' + ago(pr.created) : ''));
     if (pr.head) lines.push(pr.head);
+    if (pr.checking) lines.push('Being test-merged with the others, in memory, to see which can go in the batch together.');
     if (pr.conflict) lines.push(pr.conflict);
     if (pr.at) lines.push('landed ' + ago(pr.at) + (pr.serial ? ', serially (' + pr.serial + ')' : ''));
     lines.forEach(function (l) { var s = document.createElement('span'); s.textContent = l; t.appendChild(s); });
@@ -351,12 +359,13 @@ const QUEUE_JS = `
 // queueState(VIEW): what the browser draws, from queueView in delivery.js.
 function queueState(view) {
   const note = [];
+  if (view.checking && view.checking.length) note.push(`Test-merging ${view.checking.map((n) => '#' + n).join(', ')} to find which go in the batch together.`);
   if (view.batch) note.push(`Batch #${view.batch.number} is testing ${view.batch.members.length} pull request(s) together.`);
   const ready = view.open.filter((p) => p.state === 'green').length;
   if (ready) note.push(`${ready} green and waiting.`);
   if (!view.batch && !view.open.length) note.push('Nothing waiting.');
   return {
-    open: view.open.map(pick),
+    open: view.open.map((p) => ({ ...pick(p), checking: (view.checking || []).includes(p.number) })),
     batch: view.batch ? { number: view.batch.number, state: view.batch.state, done: view.batch.done, total: view.batch.total, members: view.batch.members.map(pick) } : null,
     main: view.main,
     runners: view.runners || null,
@@ -410,6 +419,8 @@ function demoFrames() {
   return [
     { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green')], batch: null, main: before,
       ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. Jobs wait in one line for whichever runner frees first.' },
+    { open: [P(251, 'green', { checking: true }), P(252, 'green', { checking: true }), P(253, 'pending'), P(254, 'green', { checking: true }), P(255, 'green', { checking: true })], batch: null, main: before,
+      ...R([253, 'app'], null, []), note: 'The queue test-merges the green ones with each other, in memory, to see which fit together. No runner is needed for that.' },
     { open: [P(253, 'pending'), C255], batch: B(0, 3, 'pending'), main: before,
       ...R([253, 'app'], null, [[256, 'checks'], [256, 'app']]), note: 'The batch takes #251 first, then the most that fit beside it. #255 conflicts with #252, so it waits, and its owner is told which files.' },
     { open: [P(253, 'pending'), C255], batch: B(1, 3, 'pending'), main: before,

@@ -863,12 +863,16 @@ good=$(git -C "$wt" rev-parse HEAD)
 # pull request left out conflicts with one that lands now, so it will
 # conflict with main: its owner is told now, with the files.
 for pr in $prs; do git -C "$wt" fetch -q origin "+refs/pull/$pr/head:refs/queue/pr-$pr" 2>/dev/null || true; done
+# The owner console reads this line to show which pull requests are being
+# test-merged; it is cleared when the pairing ends.
+printf 'checking %s\n' "$(printf '%s ' $prs | sed 's/ $//')" > "$flaky_dir/now" 2>/dev/null || true
 pairs=""
 for a in $prs; do for b in $prs; do
   [ "$a" -lt "$b" ] || continue
   git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1 || pairs="$pairs
 $a $b"
 done; done
+: > "$flaky_dir/now" 2>/dev/null || true
 if [ -n "$pairs" ]; then
   group=$(anchored_group "$(printf '%s ' $prs)" "$pairs" | tr '\n' ' ')
   for pr in $prs; do

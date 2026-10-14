@@ -133,6 +133,13 @@ test('the demo shows runners at work', () => {
   assert.ok(f.some((x) => x.runners.some((l) => l.status === 'busy')));
 });
 
+test('pull requests the queue is test-merging gleam', () => {
+  const st = qv.queueState({ open: [{ number: 251, state: 'green' }, { number: 253, state: 'pending' }], batch: null, main: [], checking: [251] });
+  assert.deepEqual(st.open.map((p) => [p.number, p.checking]), [[251, true], [253, false]]);
+  assert.match(st.note, /Test-merging #251/);
+  assert.ok(qv.demoFrames().some((f) => f.open.some((p) => p.checking)));
+});
+
 test('the queue panel carries its data, safely', () => {
   const html = qv.renderQueue({ open: [{ number: 1, title: '</script><b>x' }], batch: null, main: [] }, { poll: 'queue.json' });
   assert.ok(html.includes('data-queue'));
