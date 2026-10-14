@@ -32,6 +32,25 @@ EOF
   set +f
 }
 
+# rerun_decision NEEDS_RERUN MAIN_STATE [POLICY]
+# NEEDS_RERUN is needs_rerun's answer for a green pull request that merges
+# cleanly onto main; MAIN_STATE is main's newest CI run on main's current
+# commit: green, red, pending (still running, or main has a newer commit
+# with no run yet) or unknown. Print "merge" or "update".
+#
+# A green pull request that merges cleanly onto a green main merges
+# without a second run, even when main moved in its classes: the full run
+# on main is the gate, and it opens the red-main issue if the two together
+# fail. A re-run is kept only when main is red or its newest commit is not
+# yet known to be green. One batch went through three full CI cycles for
+# the same code before this. POLICY "classes" restores the old rule:
+# re-run whenever main moved in the pull request's classes.
+rerun_decision() {
+  [ "$1" = yes ] || { echo merge; return 0; }
+  [ "${3:-green-main}" = classes ] && { echo update; return 0; }
+  if [ "$2" = green ]; then echo merge; else echo update; fi
+}
+
 # state_labels_json CURRENT NEW
 # CURRENT is an issue's labels, one per line; NEW is its state label. Print
 # the JSON body that sets the labels to CURRENT without any other state

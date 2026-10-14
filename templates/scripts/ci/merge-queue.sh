@@ -229,6 +229,19 @@ jobs_of() { # RUN_ID -> one job per line for run_verdict
   done
 }
 
+# main_state: green, red or pending for main's newest CI run on main's
+# current commit; pending when that commit has no completed run yet,
+# unknown when it cannot be read. One REST call.
+main_state() {
+  ms_head=$(git rev-parse "origin/$base" 2>/dev/null)
+  ms=$(gh api "repos/{owner}/{repo}/actions/workflows/${QUEUE_CI_WORKFLOW:-ci.yml}/runs?branch=$base&event=push&per_page=1" --jq '.workflow_runs[0] | "\(.head_sha)\t\(.status)\t\(.conclusion // "")"' 2>/dev/null) || { echo unknown; return 0; }
+  [ -n "$ms" ] || { echo unknown; return 0; }
+  ms_sha=${ms%%	*}; ms_rest=${ms#*	}; ms_status=${ms_rest%%	*}; ms_conc=${ms_rest#*	}
+  if [ "$ms_sha" != "$ms_head" ] || [ "$ms_status" != completed ]; then echo pending
+  elif [ "$ms_conc" = success ]; then echo green
+  else echo red; fi
+}
+
 # required_on SHA: the required check's state on one commit.
 required_on() {
   required_check "$(gh api "repos/{owner}/{repo}/commits/$1/check-runs?per_page=100" --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion // "")"' 2>/dev/null)" "${QUEUE_SUMMARY_CHECK:-CI passed}"
@@ -471,7 +484,11 @@ serial_one() {
     batch_line "$pr" "waiting" "$why"
     return 0
   fi
-  if [ "$(needs_rerun "$pr_classes" "$main_classes" "$(rerun_free_classes "$rules")")" = yes ]; then
+  nr=$(needs_rerun "$pr_classes" "$main_classes" "$(rerun_free_classes "$rules")")
+  ms=""; [ "$nr" = yes ] && ms=$(main_state)
+  merged_why="main moved only outside its classes"
+  [ "$nr" = yes ] && merged_why="main moved in its classes, but it merges cleanly and main is green; the full run on main is the gate"
+  if [ "$(rerun_decision "$nr" "$ms" "${QUEUE_RERUN:-green-main}")" = update ]; then
     if ! gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/update-branch" >/dev/null 2>"$gh_err"; then
       rate_stop
       case "$(cat "$gh_err" 2>/dev/null)" in
@@ -481,7 +498,7 @@ serial_one() {
       return 0
     fi
     sync_worktree "$hb"
-    batch_line "$pr" "updated" "main moved in its classes (PR: ${pr_classes:-none}; main: ${main_classes:-none}), CI runs again"
+    batch_line "$pr" "updated" "main moved in its classes (PR: ${pr_classes:-none}; main: ${main_classes:-none}) and main is ${ms:-not known to be green}, so CI runs again"
     return 0
   fi
   head_branch=$hb
@@ -495,7 +512,7 @@ serial_one() {
   record_flaky "$pr" "" passed
   wait_quiet_main
   gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/merge" -f merge_method=squash -f commit_title="$(serial_title "$(pr_field "$pr" 3)" "$pr" "${because:-alone}")" >/dev/null 2>"$gh_err" || { rate_stop; batch_line "$pr" "not merged" "GitHub refused the merge: $(head -n 1 "$gh_err" 2>/dev/null)"; return 0; }
-  batch_line "$pr" "merged serially" "main moved only outside its classes"
+  batch_line "$pr" "merged serially" "$merged_why"
   tidy_worktree "$head_branch"
 }
 
