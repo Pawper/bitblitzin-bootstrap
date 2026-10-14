@@ -339,7 +339,9 @@ wait_for_run() {
     run=$(latest_run "$2"); run_id=${run%%	*}
     rate_stop
     [ -n "$run_id" ] || { echo "No run found for $2 yet."; sleep 30; continue; }
-    msg=$(diagnose "$run_id"); code=$?
+    # set -e ends the script at a bare failing assignment, so the code is
+    # caught here: a pending run (2) once exited the queue with no word.
+    code=0; msg=$(diagnose "$run_id") || code=$?
     [ -n "$msg" ] && echo "$msg"
     case $code in
       0) record_flaky "$1" "$run_id" passed
@@ -476,7 +478,7 @@ serial_one() {
     rate_stop
     why="not green yet, nothing merged"
     if [ -n "$run_id" ]; then
-      msg=$(diagnose "$run_id"); code=$?
+      code=0; msg=$(diagnose "$run_id") || code=$?
       case $code in
         1) record_flaky "$pr" "$run_id" failed; why="$msg" ;;
         3) why="$msg" ;;
@@ -899,6 +901,18 @@ for pr in $prs; do
 "
   batch_line "$pr" "merged into the batch"
 done
+
+# One member is not a batch: GitHub refused a one-member batch pull request
+# because its required check had not run yet, and the member's own green
+# run already proves it. Merge it serially instead.
+if [ -n "$carried" ] && [ "$(printf '%s\n' "$carried" | grep -c .)" -eq 1 ]; then
+  only=$(printf '%s' "$carried" | cut -f1)
+  echo "Only #$only survived the batch; merging it serially instead of opening a batch of one."
+  because="batch of one"
+  serial_one "$only"
+  for pr in $dropped; do serial_one "$pr"; done
+  exit 0
+fi
 
 if [ -z "$carried" ]; then
   echo "Nothing survived the batch; running the serial queue for all of them."
