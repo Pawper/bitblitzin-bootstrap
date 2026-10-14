@@ -147,6 +147,23 @@ rest_rollup() {
     END { if (n == 0) print "none"; else if (red) print "red"; else if (pend) print "pending"; else if (canc) print "cancelled"; else print "green" }'
 }
 
+# required_check LINES [NAME]
+# LINES is "name<TAB>status<TAB>conclusion" per check run on one commit.
+# Print the state of the check branch protection requires (NAME, default
+# "CI passed") on that commit: passed, failed, pending, or missing when it
+# has not reported. GitHub refuses a merge until it has passed on the head
+# commit, whatever else is green: "Required status check CI passed is
+# expected" stopped batches three times while the queue watched the
+# workflow run instead of the check.
+required_check() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v want="${2:-CI passed}" '
+    $1 == want { found = 1; st = tolower($2); c = tolower($3)
+      if (st != "completed") state = "pending"
+      else if (c == "success" || c == "neutral" || c == "skipped") state = "passed"
+      else state = "failed" }
+    END { print found ? state : "missing" }'
+}
+
 # rest_rollup_named LINES [SUMMARY]
 # LINES is "name<TAB>outcome" per check run. The summary check (SUMMARY,
 # default "CI passed") fails whenever a job it waits on was cancelled, so a

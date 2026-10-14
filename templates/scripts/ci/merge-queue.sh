@@ -229,6 +229,29 @@ jobs_of() { # RUN_ID -> one job per line for run_verdict
   done
 }
 
+# required_on SHA: the required check's state on one commit.
+required_on() {
+  required_check "$(gh api "repos/{owner}/{repo}/commits/$1/check-runs?per_page=100" --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion // "")"' 2>/dev/null)" "${QUEUE_SUMMARY_CHECK:-CI passed}"
+}
+
+# wait_required SHA: poll the required check on SHA every thirty seconds
+# until it passes (0) or fails (1), or the wait runs out (3). A green
+# workflow run is not enough: the check must exist on this commit.
+wait_required() {
+  wr_start=$(date +%s)
+  while :; do
+    case "$(required_on "$1")" in
+      passed) return 0 ;;
+      failed) echo "The required check \"${QUEUE_SUMMARY_CHECK:-CI passed}\" failed on $1."; return 1 ;;
+    esac
+    if [ $(( $(date +%s) - wr_start )) -gt $((wait_minutes * 60)) ]; then
+      echo "The required check \"${QUEUE_SUMMARY_CHECK:-CI passed}\" has not passed on $1 after $wait_minutes minutes; giving up for now."
+      return 3
+    fi
+    sleep 30
+  done
+}
+
 # online_runners: how many self-hosted runners are online, or "unknown".
 # The owner's token can read them; ADMIN_TOKEN is used when set.
 online_runners() {
@@ -464,6 +487,11 @@ serial_one() {
   head_branch=$hb
   why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; return 0; fi
+  rq=$(required_on "$head")
+  if [ "$rq" != passed ]; then
+    batch_line "$pr" "waiting" "the required check \"${QUEUE_SUMMARY_CHECK:-CI passed}\" is $rq on its head commit; GitHub refuses the merge until it passes"
+    return 0
+  fi
   record_flaky "$pr" "" passed
   wait_quiet_main
   gh api -X PUT "repos/{owner}/{repo}/pulls/$pr/merge" -f merge_method=squash -f commit_title="$(serial_title "$(pr_field "$pr" 3)" "$pr" "${because:-alone}")" >/dev/null 2>"$gh_err" || { rate_stop; batch_line "$pr" "not merged" "GitHub refused the merge: $(head -n 1 "$gh_err" 2>/dev/null)"; return 0; }
@@ -824,8 +852,25 @@ git -C "$wt" push -q -u origin "$branch"
 body=$(batch_pr_body "$carried" "$refs")
 batch_pr=$(gh api -X POST "repos/{owner}/{repo}/pulls" -f base="$base" -f head="$branch" -f title="Batch $day: $(printf '%s' "$carried" | wc -l | tr -d ' ') pull requests" -f body="$body" --jq .number 2>"$gh_err") || { rate_stop; echo "Could not open the batch pull request: $(head -n 1 "$gh_err" 2>/dev/null). The branch $branch is pushed; open it by hand or run the batch again."; exit 1; }
 echo "batch PR #$batch_pr opened; waiting for the one full CI run"
-if ! wait_for_run "$batch_pr" "$branch"; then
-  close_pr "$batch_pr" "The batch's CI run was not green, so nothing merged; closed so the next batch starts clean. The member pull requests are untouched."
+batch_sha=$(git -C "$wt" rev-parse HEAD)
+batch_ok=no
+if wait_for_run "$batch_pr" "$branch" && wait_required "$batch_sha"; then batch_ok=yes
+else
+  # A job cancelled before a runner took it fails the required check
+  # without anything being wrong: re-run the failed and cancelled jobs once
+  # and wait again, rather than close a good batch.
+  checks=$(gh api "repos/{owner}/{repo}/commits/$batch_sha/check-runs?per_page=100" --jq '.check_runs[] | "\(.name)\t\(.conclusion // .status)"' 2>/dev/null)
+  if [ "$(rest_rollup_named "$checks" "${QUEUE_SUMMARY_CHECK:-CI passed}")" = cancelled ]; then
+    run=$(latest_run "$branch"); run_id=${run%%	*}
+    if [ -n "$run_id" ] && gh run rerun "$run_id" --failed >/dev/null 2>&1; then
+      echo "A job on the batch was cancelled before it ran; re-ran the failed and cancelled jobs and waiting again."
+      sleep 30
+      wait_for_run "$batch_pr" "$branch" && wait_required "$batch_sha" && batch_ok=yes
+    fi
+  fi
+fi
+if [ "$batch_ok" != yes ]; then
+  close_pr "$batch_pr" "The batch's CI was not green, so nothing merged; closed so the next batch starts clean. The member pull requests are untouched."
   echo "The batch run is not green; nothing merged. Fix it on $branch or drop a PR and run again."
   exit 1
 fi
