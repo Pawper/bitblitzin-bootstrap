@@ -910,6 +910,16 @@ eq "jobs waiting on machines are said with a rough time" "6 job(s) queued, 2 of 
 eq "queued with no runner online" "3 job(s) queued and no runner online." "$(queue_eta 3 0 0)"
 eq "nothing queued, nothing said" "" "$(queue_eta 0 2 2)"
 
+printf '\n# a batch anchored on the earliest pull request\n'
+eq "no conflicts, everyone in" "251 252 253" "$(anchored_group '251 252 253' '' | tr '\n' ' ' | sed 's/ $//')"
+eq "the earliest stays in, its conflicts go" "251 254" "$(anchored_group '251 252 253 254' "$(printf '251 252\n251 253')" | tr '\n' ' ' | sed 's/ $//')"
+eq "the largest set beside the earliest, not the first that fits" "251 253 254" "$(anchored_group '251 252 253 254' "$(printf '252 253\n252 254')" | tr '\n' ' ' | sed 's/ $//')"
+eq "on a tie, the earlier one" "251 252" "$(anchored_group '251 252 253' "$(printf '252 253')" | tr '\n' ' ' | sed 's/ $//')"
+eq "one pull request is its own batch" "251" "$(anchored_group '251' '')"
+eq "the notice names the files and the fix" "yes" "$(conflict_notice "$(printf 'src/cart.ts\nsrc/a.ts')" 252 | grep -q '#252, which goes into this batch first in:' && conflict_notice 'src/cart.ts' main | grep -q 'Never rebase or force-push' && echo yes)"
+eq "conflicts are noticed once per head commit" "1" "$(grep -cF 'grep -qx "$1 $nc_sha" "$nc_seen"' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the queue notices in all three places" "3" "$(grep -c '^ *notify_conflict "\$pr"' "$root/templates/scripts/ci/merge-queue.sh")"
+
 printf '\n# when a green pull request needs a second run\n\'
 eq "main moved outside its classes: merge" "merge" "$(rerun_decision no red)"
 eq "main moved in its classes and main is green: merge, main's run is the gate" "merge" "$(rerun_decision yes green)"

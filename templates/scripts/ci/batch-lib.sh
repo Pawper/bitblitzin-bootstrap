@@ -341,3 +341,54 @@ queue_eta() {
   qe_eta=$(( ($1 + qe_r - 1) / qe_r * ${4:-4} ))
   printf '%s job(s) queued, %s of %s runner(s) busy; about %s minute(s) at one job per runner. Waiting on machines, not on a failure.\n' "$1" "${2:-0}" "$qe_r" "$qe_eta"
 }
+
+# anchored_group ORDER PAIRS
+# ORDER is the batch's pull requests, earliest first, space separated.
+# PAIRS is one conflicting pair per line, "A B". Print the batch: the
+# first pull request always, then the largest set of the others that
+# conflicts with nothing in it, earliest first on a tie. Merging in order
+# and dropping each conflict kept {251, 252} and left 253 and 254 out when
+# 253 and 254 conflicted only with 252; this keeps {251, 253, 254}.
+# Exhaustive up to 16 pull requests, in order after that.
+anchored_group() {
+  printf '%s\n' "$2" | awk -v order="$1" '
+    NF == 2 { c[$1 " " $2] = 1; c[$2 " " $1] = 1 }
+    END {
+      n = split(order, p, " ")
+      if (n == 0) exit
+      if (n > 17) {
+        k = 0
+        for (i = 1; i <= n; i++) { ok = 1; for (j = 1; j <= k; j++) if ((p[i] " " g[j]) in c) ok = 0; if (ok) g[++k] = p[i] }
+        for (j = 1; j <= k; j++) print g[j]
+        exit
+      }
+      best = -1; bestkey = ""
+      m = n - 1; total = 2 ^ m
+      for (mask = 0; mask < total; mask++) {
+        k = 1; s[1] = p[1]; ok = 1; key = ""
+        for (b = 0; b < m && ok; b++) {
+          if (int(mask / 2 ^ b) % 2 == 0) continue
+          x = p[b + 2]
+          for (j = 1; j <= k; j++) if ((x " " s[j]) in c) { ok = 0; break }
+          s[++k] = x
+        }
+        if (!ok) continue
+        # earlier first on a tie: the key reads the chosen positions in order
+        for (b = 0; b < m; b++) key = key (int(mask / 2 ^ b) % 2 ? "1" : "0")
+        if (k > best || (k == best && key > bestkey)) { best = k; bestkey = key; for (j = 1; j <= k; j++) out[j] = s[j] }
+      }
+      for (j = 1; j <= best; j++) print out[j]
+    }'
+}
+
+# conflict_notice FILES WITH
+# The comment the queue leaves on a pull request it could not merge for a
+# conflict: which files, with what, and what to do. WITH is "main" or a
+# pull request number. The owning agent finds it on its next session.
+conflict_notice() {
+  cn_files=$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | head -n 10 | sed 's/^/- `/; s/$/`/')
+  if [ "$2" = main ]; then cn_with="main"; else cn_with="#$2, which goes into this batch first"; fi
+  printf 'The merge queue could not take this pull request: it conflicts with %s' "$cn_with"
+  if [ -n "$cn_files" ]; then printf ' in:\n\n%s\n\n' "$cn_files"; else printf '.\n\n'; fi
+  printf 'To resolve it: in this branch'"'"'s worktree, merge main in (`git fetch origin && git merge origin/main`), fix the files, run their tests, and push. Never rebase or force-push. The queue takes it again once it is green. It is labeled state:blocked until then.\n'
+}

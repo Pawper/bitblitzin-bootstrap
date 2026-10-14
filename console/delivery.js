@@ -208,7 +208,9 @@ function runnerLanes(runners, jobs, open) {
       job: j ? { name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch, batch: /^batch-/.test(j.head_branch || '') } : null,
     };
   });
-  return { lanes, queued: (jobs || []).filter((j) => j.status === 'queued').length };
+  const waiting = (jobs || []).filter((j) => j.status === 'queued')
+    .map((j) => ({ name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch, batch: /^batch-/.test(j.head_branch || '') }));
+  return { lanes, waiting, queued: waiting.length };
 }
 
 // queueView(RAW): the merge queue as three columns. Open pull requests
@@ -233,7 +235,7 @@ function queueView(raw) {
   const landed = (raw.mainCommits || []).map((c) => ({ number: mergedNumber(c.message), title: c.message.split('\n')[0], at: c.date, serial: serialReason(c.message) }))
     .filter((c, i, all) => c.number != null && all.findIndex((x) => x.number === c.number) === i).slice(0, 6);
   const r = raw.runners ? runnerLanes(raw.runners, raw.activeJobs, open) : null;
-  return { open: waiting, batch, main: landed, runners: r ? r.lanes : null, queued: r ? r.queued : null };
+  return { open: waiting, batch, main: landed, runners: r ? r.lanes : null, waiting: r ? r.waiting : null, queued: r ? r.queued : null };
 }
 
 // ---------- reading (the one impure part)

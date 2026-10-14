@@ -470,6 +470,7 @@ serial_one() {
     files=$(git merge-tree --write-tree --name-only origin/"$base" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
     if [ "$(mergeable_word "$(pr_field "$pr" 5)")" = CONFLICTING ] || [ -n "$files" ]; then
       batch_line "$pr" "not merged" "$(conflict_line "$files")"
+      notify_conflict "$pr" "$files" main
       return 0
     fi
   fi
@@ -749,6 +750,20 @@ if [ "$mode" = drain ]; then
   exit 0
 fi
 
+# notify_conflict PR FILES WITH: comment on the pull request and label it
+# state:blocked, once per head commit, so the owning agent finds the
+# conflict on its next session instead of it waiting until someone looks.
+notify_conflict() {
+  nc_sha=$(pr_field "$1" 2)
+  nc_seen="$flaky_dir/noticed"
+  grep -qx "$1 $nc_sha" "$nc_seen" 2>/dev/null && return 0
+  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$(conflict_notice "$2" "$3")" >/dev/null 2>&1 || return 0
+  nc_cur=$(gh api "repos/{owner}/{repo}/issues/$1/labels" --jq '.[].name' 2>/dev/null || true)
+  state_labels_json "$nc_cur" "state:blocked" | gh api -X PUT "repos/{owner}/{repo}/issues/$1/labels" --input - >/dev/null 2>&1 || true
+  echo "$1 $nc_sha" >> "$nc_seen"
+  say "  #$1: commented with the conflicting files and labeled it state:blocked."
+}
+
 # ready_others EXCLUDE: the open pull requests aimed at the base, not
 # drafts, green and not conflicting with main, other than EXCLUDE.
 ready_others() {
@@ -841,6 +856,30 @@ carried=""
 refs=""
 dropped=""
 good=$(git -C "$wt" rev-parse HEAD)
+
+# Which pull requests go in. The earliest always does; of the rest, the
+# largest set that conflicts with nothing already in, read pair by pair
+# with git merge-tree, which merges in memory and touches no files. A
+# pull request left out conflicts with one that lands now, so it will
+# conflict with main: its owner is told now, with the files.
+for pr in $prs; do git -C "$wt" fetch -q origin "+refs/pull/$pr/head:refs/queue/pr-$pr" 2>/dev/null || true; done
+pairs=""
+for a in $prs; do for b in $prs; do
+  [ "$a" -lt "$b" ] || continue
+  git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1 || pairs="$pairs
+$a $b"
+done; done
+if [ -n "$pairs" ]; then
+  group=$(anchored_group "$(printf '%s ' $prs)" "$pairs" | tr '\n' ' ')
+  for pr in $prs; do
+    case " $group " in *" $pr "*) continue ;; esac
+    with=$(printf '%s\n' "$pairs" | awk -v p="$pr" -v g=" $group " '$1 == p && index(g, " " $2 " ") { print $2; exit } $2 == p && index(g, " " $1 " ") { print $1; exit }')
+    files=$(git -C "$wt" merge-tree --write-tree --name-only "refs/queue/pr-$pr" "refs/queue/pr-$with" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    batch_line "$pr" "left for later" "conflicts with #$with, which goes in this batch"
+    notify_conflict "$pr" "$files" "$with"
+  done
+  prs=$group
+fi
 for pr in $prs; do
   # Read fresh, not from the cache: a pull request merged or closed since
   # the list was made has nothing left to merge.
@@ -859,6 +898,7 @@ for pr in $prs; do
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
     git -C "$wt" reset -q --hard "$good"
     batch_line "$pr" "dropped" "conflicts with the batch so far"
+    notify_conflict "$pr" "$(git -C "$wt" merge-tree --write-tree --name-only "$good" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')" main
     dropped="$dropped $pr"
     continue
   fi

@@ -58,11 +58,19 @@ const QUEUE_CSS = `
 .mq-runners-head .q { letter-spacing: 0; text-transform: none; font-size: 12px; }
 .mq-runners-head .q.many { color: var(--mq-amber); }
 .mq-lanes { display: grid; gap: 6px; }
+.mq-wait { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; padding: 6px; border: 1px dashed var(--mq-line); border-radius: 10px; margin-bottom: 12px; align-items: center; }
+.mq-wait-none { color: var(--mq-soft); font-size: 12px; padding: 0 6px; }
+.mq-wjob { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mq-soft); transition: transform .9s cubic-bezier(.3,.7,.2,1), opacity .4s ease; }
+.mq-wjob em { font-style: normal; }
+.lanes-head { margin-top: 2px; }
 .mq-lane { display: grid; grid-template-columns: 10px minmax(70px, 1fr) 2fr; align-items: center; gap: 10px; background: var(--mq-chip); border: 1px solid #2c3036;
   border-radius: 10px; padding: 7px 12px; font-size: 12px; transition: border-color .4s ease, box-shadow .4s ease; }
 .mq-lane .ld { width: 8px; height: 8px; border-radius: 50%; background: var(--mq-grey); }
-.mq-lane.busy { border-color: rgba(56,200,240,.5); box-shadow: 0 0 10px rgba(56,200,240,.15); }
-.mq-lane.busy .ld { background: var(--mq-cyan); animation: mq-blink 1.2s infinite; }
+.mq-lane { --lane: var(--mq-cyan); border-left: 3px solid var(--lane); }
+.mq-lane .rn { color: var(--lane); }
+.mq-lane.busy { border-color: var(--lane); box-shadow: 0 0 10px color-mix(in srgb, var(--lane) 25%, transparent); }
+.mq-lane.busy .ld { background: var(--lane); animation: mq-blink 1.2s infinite; }
+.mq-lane .slot .mq-pill { border-color: var(--lane); }
 .mq-lane.idle .ld { background: var(--mq-green); }
 .mq-lane.offline { opacity: .5; } .mq-lane.offline .ld { background: var(--mq-red); }
 .mq-lane .rn { font-weight: 600; }
@@ -71,9 +79,10 @@ const QUEUE_CSS = `
   font-weight: 700; font-size: 11px; color: var(--mq-ink); transition: transform .9s cubic-bezier(.3,.7,.2,1), opacity .4s ease; will-change: transform; }
 .mq-pill.batch { border-color: var(--mq-cyan); color: var(--mq-cyan); box-shadow: 0 0 10px rgba(56,200,240,.3); }
 .mq-pill.main { border-color: var(--mq-amber); color: var(--mq-amber); }
-.mq-chip.working { box-shadow: 0 0 0 1px var(--mq-cyan), 0 0 12px rgba(56,200,240,.35); }
-.mq-box.working { animation: mq-breathe 2s ease-in-out infinite; }
-@keyframes mq-breathe { 50% { box-shadow: 0 0 28px rgba(56,200,240,.6), inset 0 0 16px rgba(56,200,240,.2); } }
+.mq-chip.working { box-shadow: 0 0 0 1.5px var(--lane, var(--mq-cyan)), 0 0 12px var(--lane, var(--mq-cyan)); }
+.mq-box.working { border-color: var(--lane, var(--mq-cyan)); box-shadow: 0 0 22px var(--lane, var(--mq-cyan)); }
+.mq-chip[data-state=conflict] { border-color: var(--mq-red); }
+.mq-chip[data-state=conflict] .mq-dot { background: var(--mq-red); border-radius: 2px; transform: rotate(45deg); }
 .mq-lane.busy .job { color: var(--mq-ink); }
 .mq-foot { margin-top: 14px; color: var(--mq-soft); font-size: 12px; min-height: 1.4em; }
 .mq-empty { position: absolute; left: 0; right: 0; top: 40%; text-align: center; color: var(--mq-soft); font-size: 12px; padding: 0 10px; transition: opacity .4s ease; }
@@ -87,7 +96,7 @@ const QUEUE_CSS = `
 const QUEUE_JS = `
 (function () {
   var STATE_WORDS = { green: 'CI green; ready to merge', pending: 'CI running', red: 'CI failed', cancelled: 'CI cancelled; will re-run',
-    none: 'no checks yet', draft: 'draft; not queued', merged: 'landed on main', batch: 'in the batch' };
+    none: 'no checks yet', draft: 'draft; not queued', conflict: 'conflicts; the queue told its owner', merged: 'landed on main', batch: 'in the batch' };
   function ago(iso) {
     if (!iso) return '';
     var m = Math.round((Date.now() - Date.parse(iso)) / 60000);
@@ -140,6 +149,7 @@ const QUEUE_JS = `
     var b = document.createElement('b'); b.textContent = '#' + pr.number + '  ' + (pr.title || ''); t.appendChild(b);
     if (pr.author) lines.push('by ' + pr.author + (pr.created ? ', opened ' + ago(pr.created) : ''));
     if (pr.head) lines.push(pr.head);
+    if (pr.conflict) lines.push(pr.conflict);
     if (pr.at) lines.push('landed ' + ago(pr.at) + (pr.serial ? ', serially (' + pr.serial + ')' : ''));
     lines.forEach(function (l) { var s = document.createElement('span'); s.textContent = l; t.appendChild(s); });
     var s2 = document.createElement('span'); s2.className = 'st';
@@ -189,57 +199,102 @@ const QUEUE_JS = `
     this.drawRunners(state);
     if (this.foot) this.foot.textContent = state.note || '';
   };
-  // One lane per runner: what it runs now, or idle, or offline; and how
-  // many jobs wait for one. Lanes are kept by name, so a change of job
-  // fades in place rather than redrawing the row.
+  // The runners row. Above the lanes, the waiting line: every job queued
+  // for a runner, in one line, because GitHub keeps one queue that any
+  // free runner takes from, not a queue per runner. Below it, one lane per
+  // runner in its own colour: the job it runs now, or idle, or offline. A
+  // job's pill flies from its pull request into the waiting line, and from
+  // there into the lane of the runner that takes it; the chip of a pull
+  // request being worked on glows in that runner's colour.
+  var LANE_COLORS = ['#38c8f0', '#c084fc', '#fb923c', '#a3e635', '#f472b6', '#facc15'];
+  function pillFor(job, batchNo) {
+    var isBatch = job.pr != null && (job.batch || job.pr === batchNo);
+    var isMain = !job.pr && job.branch === 'main';
+    return { isBatch: isBatch, isMain: isMain,
+      text: isBatch ? 'Batch #' + job.pr : isMain ? 'main' : job.pr ? '#' + job.pr : (job.branch || 'job'),
+      cls: 'mq-pill' + (isBatch ? ' batch' : isMain ? ' main' : '') };
+  }
+  MQ.prototype.fly = function (pill, src) {
+    if (!src || this.root.classList.contains('still')) return;
+    var a = src.getBoundingClientRect(), b = pill.getBoundingClientRect();
+    if (!a.width) return;
+    pill.style.transition = 'none';
+    pill.style.transform = 'translate(' + Math.round(a.left + a.width / 2 - b.left - b.width / 2) + 'px,' + Math.round(a.top + a.height / 2 - b.top - b.height / 2) + 'px) scale(.8)';
+    pill.style.opacity = '0.5';
+    void pill.offsetWidth;
+    pill.style.transition = ''; pill.style.transform = ''; pill.style.opacity = '';
+  };
   MQ.prototype.drawRunners = function (state) {
     var box = this.root.querySelector('.mq-runners');
     if (!state.runners || !state.runners.length) { box.style.display = 'none'; return; }
     box.style.display = '';
-    var q = box.querySelector('.q'), lanes = box.querySelector('.mq-lanes');
-    var n = state.queued || 0;
-    q.textContent = n ? n + ' job' + (n === 1 ? '' : 's') + ' waiting for a runner' : 'no job waiting';
+    var self = this, batchNo = state.batch ? state.batch.number : null;
+    var srcOf = function (job, p) { return p.isBatch ? self.box : p.isMain ? self.line : self.chips['pr-' + job.pr]; };
+    // where each waiting pill was, before this redraw, so a job leaving
+    // the line for a runner flies from it
+    var wait = box.querySelector('.mq-wait'), oldWait = {};
+    Array.prototype.forEach.call(wait.children, function (el) { if (el.dataset.key) oldWait[el.dataset.key] = el.getBoundingClientRect(); });
+    var waiting = state.waiting || [];
+    var n = waiting.length || state.queued || 0;
+    var q = box.querySelector('.q');
+    q.textContent = n ? n + ' job' + (n === 1 ? '' : 's') + ' waiting for a free runner' : 'no job waiting';
     q.className = 'q' + (n > state.runners.length ? ' many' : '');
-    var have = {};
+    var keep = {};
+    Array.prototype.forEach.call(wait.querySelectorAll('[data-key]'), function (el) { keep[el.dataset.key] = el; });
+    wait.innerHTML = '';
+    if (!waiting.length) { var none = document.createElement('span'); none.className = 'mq-wait-none'; none.textContent = n ? n + ' queued' : 'empty'; wait.appendChild(none); }
+    waiting.forEach(function (job) {
+      var p = pillFor(job, batchNo), key = p.text + ' ' + job.name;
+      var el = keep[key];
+      if (!el) {
+        el = document.createElement('span'); el.dataset.key = key;
+        el.innerHTML = '<span></span><em></em>';
+        el.className = 'mq-wjob';
+      }
+      el.firstChild.className = p.cls; el.firstChild.textContent = p.text; el.lastChild.textContent = job.name;
+      wait.appendChild(el);
+      if (!keep[key]) self.fly(el, srcOf(job, p));
+    });
+    var lanes = box.querySelector('.mq-lanes'), have = {}, working = {}, batchColor = null;
     Array.prototype.forEach.call(lanes.children, function (el) { have[el.dataset.name] = el; });
-    var self = this, batchNo = state.batch ? state.batch.number : null, working = {}, batchWorking = false;
-    state.runners.forEach(function (r) {
+    state.runners.forEach(function (r, i) {
+      var color = LANE_COLORS[i % LANE_COLORS.length];
       var el = have[r.name];
       if (!el) { el = document.createElement('div'); el.dataset.name = r.name; el.innerHTML = '<span class="ld"></span><span class="rn"></span><span class="job"><span class="slot"></span><span class="what"></span></span>'; lanes.appendChild(el); }
       delete have[r.name];
       el.className = 'mq-lane ' + r.status;
+      el.style.setProperty('--lane', color);
       el.querySelector('.rn').textContent = r.name;
       var job = r.job, slot = el.querySelector('.slot'), what = el.querySelector('.what');
-      var isBatch = job && job.pr != null && (job.batch || job.pr === batchNo);
-      var isMain = job && !job.pr && job.branch === 'main';
-      var key = job ? (isBatch ? 'b' : isMain ? 'm' : 'p') + (job.pr || job.branch || '') : '';
       what.textContent = r.status === 'offline' ? 'offline' : job ? job.name : r.status === 'busy' ? 'busy' : 'idle';
-      if (job && job.pr && !isBatch) working[job.pr] = true;
-      if (isBatch) batchWorking = true;
+      var p = job ? pillFor(job, batchNo) : null;
+      if (p && p.isBatch) batchColor = batchColor || color;
+      else if (job && job.pr) working[job.pr] = working[job.pr] || color;
+      var key = p ? p.text + ' ' + job.name : '';
       if (slot.dataset.key === key) return;
       slot.dataset.key = key;
       slot.innerHTML = '';
-      if (!job || (!job.pr && !isMain)) return;
-      // The pill flies in from where its pull request sits: the chip in
-      // Open, the batch box, or main's line.
+      if (!p || (!job.pr && !p.isMain)) return;
       var pill = document.createElement('span');
-      pill.className = 'mq-pill' + (isBatch ? ' batch' : isMain ? ' main' : '');
-      pill.textContent = isBatch ? 'Batch #' + job.pr : isMain ? 'main' : '#' + job.pr;
+      pill.className = p.cls; pill.textContent = p.text;
       slot.appendChild(pill);
-      var src = isBatch ? self.box : isMain ? self.line : self.chips['pr-' + job.pr];
-      if (src && !self.root.classList.contains('still')) {
-        var a = src.getBoundingClientRect(), b = pill.getBoundingClientRect();
+      // From the waiting line when it was there, else from its pull request.
+      var from = oldWait[key];
+      if (from && !self.root.classList.contains('still')) {
+        var b = pill.getBoundingClientRect();
         pill.style.transition = 'none';
-        pill.style.transform = 'translate(' + Math.round(a.left + a.width / 2 - b.left - b.width / 2) + 'px,' + Math.round(a.top + a.height / 2 - b.top - b.height / 2) + 'px) scale(.8)';
-        pill.style.opacity = '0.6';
+        pill.style.transform = 'translate(' + Math.round(from.left - b.left) + 'px,' + Math.round(from.top - b.top) + 'px)';
         void pill.offsetWidth;
-        pill.style.transition = '';
-        pill.style.transform = '';
-        pill.style.opacity = '';
-      }
+        pill.style.transition = ''; pill.style.transform = '';
+      } else self.fly(pill, srcOf(job, p));
     });
-    Object.keys(self.chips).forEach(function (k) { self.chips[k].classList.toggle('working', !!working[k.slice(3)]); });
-    this.box.classList.toggle('working', batchWorking);
+    Object.keys(self.chips).forEach(function (k) {
+      var c = working[k.slice(3)];
+      self.chips[k].classList.toggle('working', !!c);
+      if (c) self.chips[k].style.setProperty('--lane', c);
+    });
+    this.box.classList.toggle('working', !!batchColor);
+    if (batchColor) this.box.style.setProperty('--lane', batchColor);
     Object.keys(have).forEach(function (k) { lanes.removeChild(have[k]); });
   };
   window.MergeQueueView = MQ;
@@ -274,6 +329,7 @@ function queueState(view) {
     batch: view.batch ? { number: view.batch.number, state: view.batch.state, done: view.batch.done, total: view.batch.total, members: view.batch.members.map(pick) } : null,
     main: view.main,
     runners: view.runners || null,
+    waiting: view.waiting || null,
     queued: view.queued == null ? null : view.queued,
     note: note.join(' '),
   };
@@ -293,49 +349,49 @@ function renderQueue(state, opts) {
 <div class="mq-head"><div class="mq-title">Merge queue</div><div class="mq-tag">${esc(o.tagline || 'Testing only what each change touched.')}</div></div>
 <div class="mq-cols"><div>Open</div><div style="text-align:center">Batch</div><div style="text-align:right">Main</div></div>
 <div class="mq-stage"></div>
-<div class="mq-runners"><div class="mq-runners-head"><span>Runners</span><span class="q"></span></div><div class="mq-lanes"></div></div>
+<div class="mq-runners"><div class="mq-runners-head"><span>Waiting for a runner</span><span class="q"></span></div><div class="mq-wait"></div><div class="mq-runners-head lanes-head"><span>Runners</span></div><div class="mq-lanes"></div></div>
 <div class="mq-foot" aria-live="polite"></div>
 <div class="mq-tip" role="tooltip"></div>
 <script type="application/json">${json}</script>
 </div>`;
 }
 
-// The scripted queue for demoPage: five pull requests, a batch forming,
-// testing, landing, and the next one forming.
+// The scripted queue for demoPage. Five pull requests; four are green,
+// and #255 conflicts with #252. The batch takes the earliest and the most
+// that fit beside it, leaves #255 out and tells its owner which files;
+// two runners in their own colours take jobs from one waiting line.
 function demoFrames() {
-  const pr = (n, title, author, head, state) => ({ number: n, title, author, head, state, created: null });
   const t = {
     251: ['Add the weekly digest email', 'ada', 'digest-email'],
     252: ['Fix the date picker on mobile', 'lin', 'datepicker-mobile'],
     253: ['Cache the search results', 'sam', 'search-cache'],
     254: ['Plain words on the empty cart', 'ada', 'empty-cart-copy'],
-    255: ['Migrate orders to the new table', 'kit', 'orders-migration'],
+    255: ['Show the date picker in the cart', 'kit', 'cart-datepicker'],
   };
-  const P = (n, s) => pr(n, t[n][0], t[n][1], t[n][2], s);
+  const P = (n, state, extra) => ({ number: n, title: t[n][0], author: t[n][1], head: t[n][2], state, created: null, ...(extra || {}) });
+  const C255 = P(255, 'conflict', { conflict: 'Conflicts with #252 in src/ui/DatePicker.tsx. The queue commented the files on it and labeled it blocked; its owner merges main in and fixes them.' });
   const landed = (ns) => ns.map((n) => ({ number: n, title: n > 250 ? `${t[n][0]} (#${n})` : `Earlier work (#${n})`, at: null }));
-  const B = (members, done, total, state) => ({ number: 256, state, done, total, members: members.map((n) => ({ ...P(n, state === 'green' ? 'green' : 'pending') })) });
-  const R = (a, b, q) => ({ runners: [lane('build-1', a), lane('build-2', b)], queued: q });
-  const lane = (name, job) => ({ name, status: job ? 'busy' : 'idle',
-    job: !job ? null : job[0] === 'main' ? { pr: null, branch: 'main', name: job[1] } : { pr: job[0], name: job[1], batch: job[0] === 256 } });
-  const frames = [
-    { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'red')], batch: null, main: landed([250, 249, 248]), note: 'Three pull requests are green. #253 is still testing; #255 failed.' },
-    { open: [P(253, 'pending'), P(255, 'red')], batch: B([251, 252, 254], 0, 3, 'pending'), main: landed([250, 249, 248]), note: 'The green ones go into one batch, so they are tested together once.' },
-    { open: [P(253, 'pending'), P(255, 'red')], batch: B([251, 252, 254], 1, 3, 'pending'), main: landed([250, 249, 248]), note: 'Only the checks for what the batch touched run.' },
-    { open: [P(253, 'green'), P(255, 'pending')], batch: B([251, 252, 254], 2, 3, 'pending'), main: landed([250, 249, 248]), note: '#255 was fixed and is testing again.' },
-    { open: [P(253, 'green'), P(255, 'pending')], batch: B([251, 252, 254], 3, 3, 'green'), main: landed([250, 249, 248]), note: 'The batch is green.' },
-    { open: [P(253, 'green'), P(255, 'pending')], batch: null, main: landed([254, 252, 251, 250, 249, 248]), note: 'All three land on main in one merge.' },
-    { open: [P(253, 'green'), P(255, 'green')], batch: null, main: landed([254, 252, 251, 250, 249, 248]), note: 'The next round finds two more ready.' },
+  const B = (done, total, state) => ({ number: 256, state, done, total, members: [251, 252, 254].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
+  const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name } : { pr, name, batch: pr === 256 });
+  const R = (a, b, waiting) => ({ runners: [{ name: 'build-1', status: a ? 'busy' : 'idle', job: a ? J(...a) : null }, { name: 'build-2', status: b ? 'busy' : 'idle', job: b ? J(...b) : null }], waiting: waiting.map((w) => J(...w)), queued: waiting.length });
+  const before = landed([250, 249, 248]);
+  const after = landed([254, 252, 251, 250, 249, 248]);
+  return [
+    { open: [P(251, 'green'), P(252, 'green'), P(253, 'pending'), P(254, 'green'), P(255, 'green')], batch: null, main: before,
+      ...R([253, 'checks'], [255, 'app'], [[253, 'app']]), note: 'Four pull requests are green; #253 is still being tested. Jobs wait in one line for whichever runner frees first.' },
+    { open: [P(253, 'pending'), C255], batch: B(0, 3, 'pending'), main: before,
+      ...R([253, 'app'], null, [[256, 'checks'], [256, 'app']]), note: 'The batch takes #251 first, then the most that fit beside it. #255 conflicts with #252, so it waits, and its owner is told which files.' },
+    { open: [P(253, 'pending'), C255], batch: B(1, 3, 'pending'), main: before,
+      ...R([253, 'app'], [256, 'checks'], [[256, 'app']]), note: 'The batch\'s jobs queue like anyone else\'s; a free runner takes the next in line.' },
+    { open: [P(253, 'green'), C255], batch: B(2, 3, 'pending'), main: before,
+      ...R([256, 'app'], [256, 'CI passed'], []), note: '#253 is green now. Both runners are on the batch.' },
+    { open: [P(253, 'green'), C255], batch: B(3, 3, 'green'), main: before,
+      ...R(null, null, []), note: 'The batch is green: three pull requests tested once, together.' },
+    { open: [P(253, 'green'), C255], batch: null, main: after,
+      ...R(['main', 'full'], null, []), note: 'All three land on main in one merge, and main runs its full suite once.' },
+    { open: [P(253, 'green'), P(255, 'pending')], batch: null, main: after,
+      ...R([255, 'checks'], ['main', 'full'], [[255, 'app']]), note: '#255\'s owner merged main in and fixed the file; it is being tested again.' },
   ];
-  const work = [
-    R([253, 'app'], [255, 'checks'], 1),
-    R([256, 'checks'], [253, 'app'], 2),
-    R([256, 'app'], [255, 'app'], 1),
-    R([256, 'app'], [255, 'checks'], 0),
-    R([256, 'CI passed'], null, 0),
-    R(['main', 'full'], null, 0),
-    R(null, null, 0),
-  ];
-  return frames.map((f, i) => ({ ...f, ...work[i] }));
 }
 
 // demoPage(): one self-contained page that plays the scripted queue, for
