@@ -799,7 +799,7 @@ eq "drafts and other bases never need attention here" "" "$(drain_attention "43	
 45	false	CONFLICTING	red	release" main '43 45')"
 
 eq "one green with others running: hold" "yes" "$(drain_hold 1 3)"
-eq "two green with others running: hold" "yes" "$(drain_hold 2 1)"
+eq "two green: batch now, never one then the other" "no" "$(drain_hold 2 1)"
 eq "three green: batch now" "no" "$(drain_hold 3 4)"
 eq "nothing running: merge" "no" "$(drain_hold 1 0)"
 eq "nothing green: nothing to hold" "no" "$(drain_hold 0 2)"
@@ -821,9 +821,14 @@ eq "a failure beside a cancel is red" "red" "$(rest_rollup 'cancelled
 failure')"
 eq "a cancel still running is pending" "pending" "$(rest_rollup 'cancelled
 in_progress')"
-eq "a cancelled pull request is retried once" "51" "$(drain_retry "51	false	MERGEABLE	cancelled	main" main '')"
-eq "a cancelled pull request counts as waiting until its re-run" "1" "$(drain_waiting "51	false	MERGEABLE	cancelled	main" main '')"
-eq "cancelled again after its re-run needs attention" "51	had its CI cancelled twice" "$(drain_attention "51	false	MERGEABLE	cancelled	main" main '51')"
+eq "a cancelled pull request is re-run" "51" "$(drain_retry "51	false	MERGEABLE	cancelled	main" main '')"
+eq "and re-run again the next round: cancelled is waiting, not failing" "51" "$(drain_retry "51	false	MERGEABLE	cancelled	main" main '51')"
+eq "a cancelled pull request counts as waiting" "1" "$(drain_waiting "51	false	MERGEABLE	cancelled	main" main '51')"
+eq "a cancelled pull request is never set aside" "" "$(drain_attention "51	false	MERGEABLE	cancelled	main" main '51')"
+eq "the summary failing on a cancelled job is not red" "cancelled" "$(rest_rollup_named "$(printf 'app\tcancelled\nclassify\tsuccess\nCI passed\tfailure')")"
+eq "a real failure beside a cancel is red" "red" "$(rest_rollup_named "$(printf 'app\tcancelled\ntests\tfailure\nCI passed\tfailure')")"
+eq "the summary failing alone is red" "red" "$(rest_rollup_named "$(printf 'app\tsuccess\nCI passed\tfailure')")"
+eq "a project's own summary name" "cancelled" "$(rest_rollup_named "$(printf 'web\tcancelled\nall green\tfailure')" 'all green')"
 eq "an issue a member closes is carried" "Closes #64" "$(carried_refs 'An emote per title.
 
 Closes #64')"

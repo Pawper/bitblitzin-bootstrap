@@ -174,7 +174,7 @@ pr_tsv() {
 }
 pr_field() { pr_tsv "$1" | cut -f"$2" | tr -d '\r'; }
 pr_rollup() {
-  rest_rollup "$(gh api "repos/{owner}/{repo}/commits/$1/check-runs?per_page=100" --jq '.check_runs[] | (.conclusion // .status)' 2>"$gh_err" || { rate_stop; echo; })"
+  rest_rollup_named "$(gh api "repos/{owner}/{repo}/commits/$1/check-runs?per_page=100" --jq '.check_runs[] | "\(.name)\t\(.conclusion // .status)"' 2>"$gh_err" || { rate_stop; echo; })" "${QUEUE_SUMMARY_CHECK:-CI passed}"
 }
 
 # One queue at a time. A queue takes .scratch/queue/lock and a second one
@@ -517,7 +517,7 @@ tidy_worktree() {
 
 # Drain: merge everything that is green, round after round, so nobody
 # writes their own loop. Each round reads every open pull request in one
-# call, merges the green ones (as a batch when more than two), and waits
+# call, merges the green ones (as a batch whenever two or more are green), and waits
 # for the running ones. It stops when nothing is green and nothing is
 # running, when nothing new turned green, after --rounds rounds (default
 # six), or after QUEUE_DRAIN_MINUTES (default ninety).
@@ -558,7 +558,7 @@ if [ "$mode" = drain ]; then
       rb=$(pr_field "$r" 1)
       rid=$(latest_run "$rb"); rid=${rid%%	*}
       if [ -n "$rid" ] && gh run rerun "$rid" --failed >/dev/null 2>&1; then
-        say "round $round: #$r failed or had a job cancelled; re-running its failed jobs once."
+        say "round $round: #$r failed or had a job cancelled; re-running its failed jobs (a cancelled job, every round; a failure, once)."
       fi
       retried="$retried $r"
     done
@@ -619,7 +619,7 @@ if [ "$mode" = drain ]; then
     last_look=""
     say "round $round: $n green pull request(s): $(printf '%s' "$pick" | tr '\n' ' ')"
     QUEUE_IN_DRAIN=1; export QUEUE_IN_DRAIN
-    if [ "$n" -gt 2 ]; then sh "$0" --batch --base "$base" $pick 2>&1 | tee -a "$log_file" || true; else sh "$0" --serial --base "$base" $pick 2>&1 | tee -a "$log_file" || true; fi
+    if [ "$n" -ge 2 ]; then sh "$0" --batch --base "$base" $pick 2>&1 | tee -a "$log_file" || true; else sh "$0" --serial --base "$base" $pick 2>&1 | tee -a "$log_file" || true; fi
     tried="$tried $(printf '%s' "$pick" | tr '\n' ' ')"
     if [ $(( $(date +%s) - d_start )) -ge $((drain_minutes * 60)) ]; then
       say "Drained for $drain_minutes minutes; stopping. Run --drain again to go on."

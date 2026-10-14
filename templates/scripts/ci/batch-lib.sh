@@ -104,7 +104,7 @@ drain_candidates() {
 # How many non-draft pull requests aimed at BASE are still running CI.
 drain_waiting() {
   printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v base="$2" -v tried=" $3 " '
-    NF >= 5 && $2 == "false" && $5 == base && ($4 == "pending" || ($4 == "cancelled" && index(tried, " " $1 " ") == 0)) { n++ } END { print n + 0 }'
+    NF >= 5 && $2 == "false" && $5 == base && ($4 == "pending" || $4 == "cancelled") { n++ } END { print n + 0 }'
 }
 
 # drain_retry LIST BASE RETRIED
@@ -113,7 +113,7 @@ drain_waiting() {
 # or a lost runner should not stop a change.
 drain_retry() {
   printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v base="$2" -v tried=" $3 " '
-    NF >= 5 && $2 == "false" && $5 == base && ($4 == "red" || $4 == "cancelled") && index(tried, " " $1 " ") == 0 { print $1 }' | sort -n
+    NF >= 5 && $2 == "false" && $5 == base && (($4 == "red" && index(tried, " " $1 " ") == 0) || $4 == "cancelled") { print $1 }' | sort -n
 }
 
 # drain_attention LIST BASE RETRIED
@@ -125,7 +125,7 @@ drain_attention() {
     NF >= 5 && $2 == "false" && $5 == base {
       if (toupper($3) == "CONFLICTING") printf "%s\thas conflicts with %s\n", $1, base
       else if ($4 == "red" && index(tried, " " $1 " ") > 0) printf "%s\tfailed CI twice\n", $1
-      else if ($4 == "cancelled" && index(tried, " " $1 " ") > 0) printf "%s\thad its CI cancelled twice\n", $1
+
     }' | sort -n
 }
 
@@ -147,6 +147,20 @@ rest_rollup() {
     END { if (n == 0) print "none"; else if (red) print "red"; else if (pend) print "pending"; else if (canc) print "cancelled"; else print "green" }'
 }
 
+# rest_rollup_named LINES [SUMMARY]
+# LINES is "name<TAB>outcome" per check run. The summary check (SUMMARY,
+# default "CI passed") fails whenever a job it waits on was cancelled, so a
+# job cancelled before any runner took it read as a red pull request and
+# was set aside as "failed CI twice". When another check was cancelled, the
+# summary's failure is left out, and the rollup is cancelled, which the
+# drain re-runs and waits on.
+rest_rollup_named() {
+  rrn=$(printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v sum="${2:-CI passed}" '
+    NF >= 2 { name[NR] = $1; out[NR] = tolower($2); if (out[NR] ~ /cancelled/ && $1 != sum) canc = 1; n = NR }
+    END { for (i = 1; i <= n; i++) { if (canc && name[i] == sum && out[i] ~ /failure/) continue; print out[i] } }')
+  rest_rollup "$rrn"
+}
+
 # mergeable_word STATE
 # STATE is REST's mergeable_state: clean, unstable, has_hooks, behind,
 # blocked, dirty, draft, unknown. Print the word the drain reads:
@@ -160,14 +174,14 @@ mergeable_word() {
 }
 
 # drain_hold GREEN WAITING
-# Print "yes" when the drain should wait before merging: one or two green
-# pull requests would merge serially while WAITING others are still
+# Print "yes" when the drain should wait before merging: one green pull
+# request would merge serially while WAITING others are still
 # running CI, and a serial merge moves main under every one of them, so
 # they are updated and sent back round CI and the batch that follows has
 # nothing. Hold until they finish, then batch. Print "no" when nothing is
 # waiting, nothing is green, or there are enough green ones to batch now.
 drain_hold() {
-  if [ "${1:-0}" -gt 0 ] && [ "${1:-0}" -le 2 ] && [ "${2:-0}" -gt 0 ]; then echo yes; else echo no; fi
+  if [ "${1:-0}" -eq 1 ] && [ "${2:-0}" -gt 0 ]; then echo yes; else echo no; fi
 }
 
 # rate_wait RATE NOW [FLOOR]
