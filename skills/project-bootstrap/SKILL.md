@@ -126,7 +126,7 @@ mechanical check: "report what was not done" and "stop every shell." Say so in C
 - The full run is the gate on main after every merge; a red main opens an issue automatically.
 - The merge queue merges a green PR without a re-run when main changed only outside the PR's classes. This
   depends on "require branches to be up to date" staying off in branch protection.
-- The batch is the unit of merging; serial is the exception you name. More than two green PRs go into one
+- The batch is the unit of merging; serial is the exception you name. Two or more green PRs go into one
   integration branch, merged in order with merge commits, each proven by the type-check and only the test
   files it touched, then one full run and one merge. A PR that conflicts or goes red is dropped and goes
   serially afterward. Merging must never take longer than the development did; a hook refuses the serial

@@ -4,7 +4,7 @@ Merging should never take longer than the development did. One project merged se
 
 ## When to batch
 
-Any time there are more than two green pull requests waiting. Run the queue with `--batch` and the numbers in the order you want them merged, oldest or most foundational first:
+Any time two or more green pull requests are waiting. Run the queue with `--batch` and the numbers in the order you want them merged, oldest or most foundational first:
 
 ```bash
 sh scripts/ci/merge-queue.sh --batch 41 42 45 47
@@ -14,7 +14,7 @@ What happens, in order: an integration branch named for the day is cut from main
 
 ## Drain: the queue that keeps going
 
-Most of the time, nobody should pick the numbers. `--drain` reads every open pull request in one call, merges the green ones (as a batch when more than two), waits while others are still running CI, and goes round again until nothing is left, nothing new turned green, six rounds have passed, or ninety minutes have:
+Most of the time, nobody should pick the numbers. `--drain` reads every open pull request in one call, merges the green ones (as a batch whenever two or more are green, since merging one moves main under the other and sends it back through CI), waits while others are still running CI, and goes round again until nothing is left, nothing new turned green, six rounds have passed, or ninety minutes have:
 
 ```bash
 sh scripts/ci/merge-queue.sh --drain
