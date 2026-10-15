@@ -840,6 +840,24 @@ Closes #64')"
 eq "fixes and resolves are carried as closes, once each" "Closes #12
 Closes #13" "$(carried_refs 'Fixes #12, resolves #13 and closes #12')"
 eq "a member's spec is carried" "Spec: specs/004-dashboard" "$(carried_refs 'Spec: specs/004-dashboard')"
+eq "a member's escape lines ride along whole" "Spec: specs/004-dashboard
+Parity: copy only, no logic change
+Twin: web/src/a.ts mirrors app/src/a.ts" "$(carried_refs 'Spec: specs/004-dashboard
+  Parity: copy only, no logic change
+Twin: web/src/a.ts mirrors app/src/a.ts')"
+eq "a project names its own escape keys" "Waiver: perf budget" "$(QUEUE_CARRY_KEYS='Waiver' carried_refs 'Waiver: perf budget
+Parity: not carried here')"
+eq "a batch body starts with the queue's marker" "<!-- merge-queue:batch -->" "$(batch_pr_body "$(printf '41\tA\n')" | head -n 1)"
+eq "a batch is known by its marker" "yes" "$(is_batch_body "$(batch_pr_body "$(printf '41\tA\n')")")"
+eq "and by the sentence older batches had" "yes" "$(is_batch_body 'One integration run for the pull requests below, merged in this order')"
+eq "a branch named batch-something is not a batch" "" "$(is_batch_body 'Carry escape lines into batch bodies. Closes #483')"
+eq "the queue finds batches by body, not branch" "0 2" "$(grep -c 'startswith("batch-")' "$root/templates/scripts/ci/merge-queue.sh") $(grep -c 'contains("<!-- merge-queue:batch -->")' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "each run's batch branch is its own" "batch-2026-10-15-041200" "$(batch_branch_name 2026-10-15 1 041200)"
+eq "and the second that minute" "batch-2026-10-15-041200-2" "$(batch_branch_name 2026-10-15 2 041200)"
+eq "--serial waits once for the run its refresh started" "1" "$(grep -c 'serial_refreshed=1' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "an unknown mergeable state is read again" "1" "$(grep -c 'while \[ "\$o_mw" = UNKNOWN \]' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "CI may read pull requests" "1" "$(grep -c 'pull-requests: read' "$root/templates/.github/workflows/ci.yml")"
+eq "the spec check reads the live body" "1" "$(grep -c 'SPEC_TEXT=$(gh api' "$root/templates/.github/workflows/ci.yml")"
 eq "a body with neither carries nothing" "" "$(carried_refs 'Just a copy fix.')"
 eq "the batch body carries its members' lines" "Carried from the members:
 
@@ -1177,7 +1195,7 @@ line-endings
 status-page" "$(split_checks "$(printf 'jobs:\n  classify:\n    x: 1\n  line-endings:\n    x: 1\n  status-page:\n    x: 1\n  app:\n    x: 1\n')")"
 eq "a ci.yml with one checks job is not" "" "$(split_checks "$(printf 'jobs:\n  checks:\n    x: 1\n  app:\n    x: 1\n')")"
 eq "the template itself is not" "" "$(split_checks "$(cat "$root/templates/.github/workflows/ci.yml")")"
-eq "sync points a split ci.yml at the migration page" "1" "$(grep -c 'plugin/CI-MIGRATION.md' "$root/scripts/sync/sync-templates.sh")"
+eq "sync points a split ci.yml, and one without pull-requests: read, at the migration page" "2" "$(grep -c 'plugin/CI-MIGRATION.md' "$root/scripts/sync/sync-templates.sh")"
 eq "the migration page ships with the plugin" "yes" "$([ -f "$root/CI-MIGRATION.md" ] && echo yes || echo no)"
 
 printf '\n# the CI template is three jobs on a pull request\n'

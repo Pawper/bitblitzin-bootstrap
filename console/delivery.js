@@ -242,7 +242,9 @@ function resolutionFeed(refusals, resolved, now) {
 // progress; and the last pull requests to land on main.
 function queueView(raw) {
   const open = raw.open || [];
-  const batches = open.filter((p) => /^batch-/.test(p.head));
+  // A batch is known by the queue's marker in its body, never its branch.
+  const isBatch = (p) => /<!-- merge-queue:batch -->/.test(p.body || '') || /^One integration run for the pull requests below/.test(p.body || '');
+  const batches = open.filter(isBatch);
   const inBatch = new Set();
   const batch = batches.length ? (() => {
     const b = batches[0];
@@ -254,7 +256,7 @@ function queueView(raw) {
       members: members.map((n) => open.find((p) => p.number === n) || { number: n, title: `#${n}`, state: b.state }),
     };
   })() : null;
-  const waiting = open.filter((p) => !/^batch-/.test(p.head) && !inBatch.has(p.number))
+  const waiting = open.filter((p) => !isBatch(p) && !inBatch.has(p.number))
     .map((p) => ({ ...p, state: p.draft ? 'draft' : p.state }));
   const landed = (raw.mainCommits || []).map((c) => ({ number: mergedNumber(c.message), title: c.message.split('\n')[0], at: c.date, serial: serialReason(c.message) }))
     .filter((c, i, all) => c.number != null && all.findIndex((x) => x.number === c.number) === i).slice(0, 6);

@@ -100,14 +100,15 @@ test('summarize says nothing when nothing got worse, and nothing about runners i
 test('the queue: batch members leave Open; main lists each pull request once', () => {
   const raw = {
     open: [
-      { number: 306, head: 'batch-2026-10-14', body: '- #303 A\n- #305 B', state: 'pending', jobsDone: 2, jobsTotal: 5 },
+      { number: 306, head: 'batch-2026-10-14', body: '<!-- merge-queue:batch -->\n- #303 A\n- #305 B', state: 'pending', jobsDone: 2, jobsTotal: 5 },
+      { number: 310, head: 'batch-escape-lines-483', body: 'Carry escape lines. Closes #483', state: 'green' },
       { number: 303, head: 'a', state: 'green' }, { number: 305, head: 'b', state: 'green' },
       { number: 301, head: 'c', state: 'red' }, { number: 302, head: 'd', state: 'green', draft: true },
     ],
     mainCommits: [{ message: 'X (#319)', date: at(1) }, { message: 'Merge pull request #319 from o/x', date: at(2) }, { message: 'Y (#318) [serial: alone]', date: at(3) }],
   };
   const v = d.queueView(raw);
-  assert.deepEqual(v.open.map((p) => [p.number, p.state]), [[301, 'red'], [302, 'draft']]);
+  assert.deepEqual(v.open.map((p) => [p.number, p.state]), [[310, 'green'], [301, 'red'], [302, 'draft']], 'a branch named batch-… without the marker is an ordinary pull request');
   assert.deepEqual(v.batch.members.map((p) => p.number), [303, 305]);
   assert.equal(v.batch.done, 2);
   assert.deepEqual(v.main.map((m) => m.number), [319, 318]);

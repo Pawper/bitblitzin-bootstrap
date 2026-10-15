@@ -109,6 +109,9 @@ if [ -z "$only" ] && [ -f .github/workflows/ci.yml ]; then
     echo "  ci.yml is yours and still runs $(printf '%s\n' "$split" | grep -c .) cheap checks as jobs of their own ($(printf '%s' "$split" | tr '\n' ' ' | sed 's/ $//')). The template now runs them as steps of one \"checks\" job and the install, tests and build in one \"app\" job, with a concurrency group: about 3 runner jobs a pull request instead of 10. How to move: $plugin/CI-MIGRATION.md"
     jobs=$(printf '%s\n' "$jobs" | grep -vxF checks || true)
   fi
+  if ! grep -q 'pull-requests: read' .github/workflows/ci.yml; then
+    echo "  ci.yml is yours and cannot read pull requests: add \"pull-requests: read\" under permissions so checks read the live body (a re-run keeps the old one). How: $plugin/CI-MIGRATION.md, section 0.10.1"
+  fi
   [ -n "$jobs" ] && echo "  ci.yml is yours; the template has jobs it lacks: $(printf '%s' "$jobs" | tr '\n' ' ')(copy them from $tpl/.github/workflows/ci.yml and add each to CI passed)"
 fi
 for f in .gitattributes .gitignore; do

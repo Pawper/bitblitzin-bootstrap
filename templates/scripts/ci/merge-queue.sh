@@ -510,6 +510,15 @@ serial_one() {
     fi
     sync_worktree "$hb"
     batch_line "$pr" "updated" "main moved in its classes (PR: ${pr_classes:-none}; main: ${main_classes:-none}) and main is ${ms:-not known to be green}, so CI runs again"
+    # Run by hand, --serial waits for that run and merges, rather than
+    # leaving its caller to loop; once only, so a main that keeps moving
+    # is said, not chased. A drain moves on and comes back next round.
+    if [ -z "$QUEUE_IN_DRAIN" ] && [ -z "${serial_refreshed:-}" ]; then
+      serial_refreshed=1
+      sleep 20
+      rm -f "$flaky_dir/pr-$pr.tsv" 2>/dev/null
+      if wait_for_run "$pr" "$hb"; then serial_one "$pr"; fi
+    fi
     return 0
   fi
   head_branch=$hb
@@ -606,7 +615,7 @@ if [ "$mode" = drain ]; then
     # Open batches: their members are theirs, not the drain's. A batch one of
     # whose members has landed on its own no longer matches main; close it.
     members=""; settled=""
-    for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null); do
+    for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select((.body // "") | (contains("<!-- merge-queue:batch -->") or startswith("One integration run for the pull requests below"))) | .number' 2>/dev/null); do
       bm=$(batch_members "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq '.body // ""' 2>/dev/null)")
       landed=""
       for m in $bm; do [ "$(gh api "repos/{owner}/{repo}/pulls/$m" --jq '.merged' 2>/dev/null)" = true ] && landed="$landed #$m"; done
@@ -634,7 +643,14 @@ if [ "$mode" = drain ]; then
     listed=$(drop_members "$listed" "$members $settled")
     open=$(printf '%s\n' "$listed" | while IFS="$tab" read -r o_num o_draft o_sha o_base; do
       [ -n "$o_num" ] || continue
-      printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$(mergeable_word "$(pr_field "$o_num" 5)")" "$(pr_rollup "$o_sha")" "$o_base"
+      # After main moves GitHub says "unknown" for a few seconds while it
+      # recomputes; read again before treating the pull request as not ready.
+      o_mw=$(mergeable_word "$(pr_field "$o_num" 5)"); o_try=0
+      while [ "$o_mw" = UNKNOWN ] && [ "$o_try" -lt 3 ]; do
+        sleep 4; rm -f "$flaky_dir/pr-$o_num.tsv" 2>/dev/null
+        o_mw=$(mergeable_word "$(pr_field "$o_num" 5)"); o_try=$((o_try + 1))
+      done
+      printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$o_mw" "$(pr_rollup "$o_sha")" "$o_base"
     done)
     rate_ok
     # A red pull request gets one retry of its failed jobs; a second red,
@@ -800,9 +816,10 @@ fi
 git fetch -q origin "$base"
 day=$(date +%Y-%m-%d)  # the owner's local day, like every date in the repository
 n=1
-branch=$(batch_branch_name "$day" "$n")
+stamp=$(date +%H%M%S)
+branch=$(batch_branch_name "$day" "$n" "$stamp")
 while git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; do
-  n=$((n + 1)); branch=$(batch_branch_name "$day" "$n")
+  n=$((n + 1)); branch=$(batch_branch_name "$day" "$n" "$stamp")
 done
 # The main checkout is the first worktree git lists, whatever folder the
 # queue was started from; its node_modules are the ones to link, and the
@@ -990,7 +1007,7 @@ close_pr() { # NUMBER REASON
   gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$2" >/dev/null 2>&1 || true
   gh api -X PATCH "repos/{owner}/{repo}/pulls/$1" -f state=closed >/dev/null 2>&1 && echo "closed batch PR #$1: $2"
 }
-gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null \
+gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select((.body // "") | (contains("<!-- merge-queue:batch -->") or startswith("One integration run for the pull requests below"))) | .number' 2>/dev/null \
   | while read -r old; do [ -n "$old" ] && close_pr "$old" "Superseded by a new batch from the queue; its members are carried there if still green."; done
 
 git -C "$wt" push -q -u origin "$branch"
