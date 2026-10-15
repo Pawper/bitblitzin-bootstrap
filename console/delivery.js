@@ -50,8 +50,18 @@ function minutes(x) {
 // rollup(CHECK_RUNS): one word for a commit's checks, as the queue reads
 // them: red on any failure, pending while any runs, green when all passed
 // or were skipped, cancelled when only cancellations stand in the way.
-function rollup(runs) {
-  if (!runs || !runs.length) return 'none';
+function rollup(all) {
+  if (!all || !all.length) return 'none';
+  // Only each check's newest attempt counts: GitHub lists every attempt on
+  // a commit, so a red run that was re-run kept the dot red while the new
+  // run was still going.
+  const newest = {};
+  all.forEach((r, i) => {
+    const k = r.name || `#${r.id || i}`;
+    const at = Date.parse(r.started_at || '') || r.id || 0;
+    if (!newest[k] || at >= newest[k].at) newest[k] = { at, r };
+  });
+  const runs = Object.values(newest).map((x) => x.r);
   const bad = ['failure', 'timed_out', 'startup_failure', 'action_required'];
   if (runs.some((r) => bad.includes(r.conclusion))) return 'red';
   if (runs.some((r) => r.status !== 'completed')) return 'pending';

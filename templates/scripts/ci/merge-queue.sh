@@ -848,6 +848,16 @@ if [ "$mode" = drain ]; then
     elif [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
       gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what the drain merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
     else say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."; fi
+    # Release channels (store uploads, test distributions) follow Deploy:
+    # they start on workflow_run of Deploy, once per drain. Where no Deploy
+    # run starts them, the ones listed under "releases" in
+    # .claude/deploy.json are started here, once.
+    if [ "$d_end" != "$d_begin" ] && ! grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
+      for rw_f in $(release_workflows "$(cat .claude/deploy.json 2>/dev/null)"); do
+        gh api -X POST "repos/{owner}/{repo}/actions/workflows/$rw_f/dispatches" -f ref="$base" >/dev/null 2>&1 \
+          && say "Started the release workflow $rw_f for what the drain merged." || say "Could not start $rw_f; run it from the Actions tab."
+      done
+    fi
   fi
   # Re-read each one before calling it a failure: a pull request red
   # earlier in the drain may be green, or only cancelled, by now.

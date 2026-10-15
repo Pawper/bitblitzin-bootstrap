@@ -81,6 +81,25 @@ The serial queue merges a green pull request without a second CI run when main m
 
 A green pull request that merges cleanly onto main also merges without a second run when main moved in its classes, as long as main's newest run, on main's current commit, is green. The full run on main is the gate, as the rules say, and it opens the red-main issue if the two together fail. The re-run is kept only when main is red or its newest commit has not finished its run. One batch went through three full CI cycles for the same code under the old rule. `QUEUE_RERUN=classes` restores it: re-run whenever main moved in the pull request's classes.
 
+## Release channels follow Deploy
+
+A release build (a Play internal upload, a Firebase App Distribution, a TestFlight build) starts after Deploy, never after CI. A workflow on `workflow_run` of CI builds and uploads on every merge to main: a serial landing round once uploaded 29 Play versions in an afternoon, each a full build on a self-hosted runner. Deploy runs once per drain (`--deploy`, or its own schedule), so a release that follows it runs once per landing round:
+
+```yaml
+on:
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+```
+
+The release checks its own paths (did `android/` change since the last upload?) and skips when nothing it ships moved. List the release workflows in `.claude/deploy.json` under `"releases": ["play-internal.yml", "app-distribution.yml"]`: when the project has no Deploy run to follow (the guard path), `--deploy` starts each of them once instead. Sync names any workflow still on `workflow_run` of CI.
+
 ## Holding a pull request, pausing the schedule
 
 - **Hold one pull request.** A label `queue:hold` (or `hold`), or a line `Queue: hold` in its body, keeps a green pull request out of every drain and batch. `--serial N` refuses it too, unless a person gives a reason with `--because`. Remove the label or the line to release it.

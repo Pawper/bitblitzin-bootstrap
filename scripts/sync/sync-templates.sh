@@ -114,6 +114,14 @@ if [ -z "$only" ] && [ -f .github/workflows/ci.yml ]; then
   fi
   [ -n "$jobs" ] && echo "  ci.yml is yours; the template has jobs it lacks: $(printf '%s' "$jobs" | tr '\n' ' ')(copy them from $tpl/.github/workflows/ci.yml and add each to CI passed)"
 fi
+# A release workflow that builds on every merge (workflow_run of CI) is
+# the project's own file; say so, and how to make it follow Deploy.
+for wf_f in .github/workflows/*.yml; do
+  [ -z "$only" ] && [ -f "$wf_f" ] || continue
+  if [ "$(per_merge_release "$(cat "$wf_f")")" = yes ]; then
+    echo "  $wf_f builds a release on every merge to main (it starts on workflow_run of CI). Make it follow Deploy instead: workflow_run of Deploy plus workflow_dispatch, and list it under \"releases\" in .claude/deploy.json. How: $tpl/scripts/ci/QUEUE.md, \"Release channels follow Deploy\""
+  fi
+done
 for f in .gitattributes .gitignore; do
   [ -z "$only" ] && [ -f "$f" ] || continue
   lines=$(missing_lines "$(cat "$tpl/$f")" "$(cat "$f")")
