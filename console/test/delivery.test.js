@@ -157,6 +157,12 @@ test('the batch PR jobs belong to the batch, and CI passed is not work', () => {
   assert.deepEqual(r.waiting.map((w) => [w.pr, w.name]), [[12, 'CI passed']], 'CI passed waits only when it is all that is left in its run');
 });
 
+test('every poll repaints and says when, or why not', () => {
+  assert.ok(qv.QUEUE_JS.includes("stamp('updated '"));
+  assert.ok(qv.QUEUE_JS.includes("stamp('could not redraw: '"));
+  assert.ok(qv.QUEUE_JS.includes("stamp('could not read the queue: '"));
+});
+
 test('the queue picture explains each job', () => {
   assert.doesNotThrow(() => new Function(qv.QUEUE_JS), 'the page script parses');
   assert.ok(qv.QUEUE_JS.includes('JOB_TIPS'));

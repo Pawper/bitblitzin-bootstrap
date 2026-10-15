@@ -318,7 +318,7 @@ async function gather(root, opts) {
   const o = opts || {};
   const key = `${root}|${o.queueOnly ? 'q' : 'all'}`;
   const hit = cache.get(key);
-  const life = o.queueOnly ? 60000 : 300000;
+  const life = o.queueOnly ? 20000 : 300000;
   if (hit && !o.fresh && Date.now() - hit.at < life) return hit.raw;
 
   const raw = { read: [] };
