@@ -536,6 +536,7 @@ serial_one() {
     run=$(latest_run "$hb"); run_id=${run%%	*}
     rate_stop
     why="not green yet, nothing merged"
+    code=2
     if [ -n "$run_id" ]; then
       code=0; msg=$(diagnose "$run_id") || code=$?
       case $code in
@@ -549,6 +550,15 @@ serial_one() {
           if wait_for_run "$pr" "$hb"; then rm -f "$flaky_dir/pr-$pr.tsv"; serial_one "$pr"; return 0; fi
           return 0 ;;
       esac
+    fi
+    # Run by hand on a pull request whose checks are still running,
+    # --serial waits for them and merges, once, rather than leaving its
+    # caller to wait and run it again. A red run is said, never waited on;
+    # a drain moves on and comes back next round.
+    if [ -z "$QUEUE_IN_DRAIN" ] && [ -z "${serial_waited:-}" ] && { [ "$code" = 0 ] || [ "$code" = 2 ]; }; then
+      serial_waited=1
+      batch_line "$pr" "waiting" "its checks are still running; waiting for them (up to ${QUEUE_WAIT_MINUTES:-60} minutes), then merging"
+      if wait_for_run "$pr" "$hb"; then rm -f "$flaky_dir/pr-$pr.tsv" 2>/dev/null; serial_one "$pr"; return 0; fi
     fi
     batch_line "$pr" "waiting" "$why"
     return 0
@@ -583,6 +593,13 @@ serial_one() {
   why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; return 0; fi
   rq=$(required_on "$head")
+  # The same for the required check alone: by hand, wait for it once.
+  if [ "$rq" = pending ] && [ -z "$QUEUE_IN_DRAIN" ] && [ -z "${serial_waited:-}" ]; then
+    serial_waited=1
+    batch_line "$pr" "waiting" "the required check \"${QUEUE_SUMMARY_CHECK:-CI passed}\" is still running; waiting for it, then merging"
+    wait_required "$head" >/dev/null 2>&1 || true
+    rq=$(required_on "$head")
+  fi
   if [ "$rq" != passed ]; then
     batch_line "$pr" "waiting" "the required check \"${QUEUE_SUMMARY_CHECK:-CI passed}\" is $rq on its head commit; GitHub refuses the merge until it passes"
     return 0
