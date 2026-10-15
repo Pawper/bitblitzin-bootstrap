@@ -28,7 +28,7 @@ The drain holds a serial merge while other pull requests are still running CI. O
 
 A drain started with `/loop` runs only while that session is open; close the app and six green pull requests sit until morning. Two ways to keep it going without a session:
 
-- **A workflow.** `.github/workflows/queue-drain.yml` runs `--drain` every thirty minutes on a self-hosted runner. It needs a classic token with `repo` as the secret `QUEUE_TOKEN`, because a merge made with the default token does not start the full run on main. Adjust the runner labels and the schedule.
+- **A workflow.** `.github/workflows/queue-drain.yml` runs `--drain` every thirty minutes on a GitHub-hosted runner, so it never queues behind, or holds a runner from, the checks it waits for; the repository variable `QUEUE_RUNS_ON` moves it to a self-hosted Linux or macOS runner. Each run drains for at most `QUEUE_DRAIN_MINUTES` (default 25) and skips itself when a drain finished in the last `QUEUE_DRAIN_GAP` minutes (default 10). It needs a classic token with `repo` as the secret `QUEUE_TOKEN`, because a merge made with the default token does not start the full run on main. Adjust the runner labels and the schedule.
 - **An OS task.** On Windows, a scheduled task that runs `sh scripts/ci/merge-queue.sh --drain` from the repository every thirty minutes under the user who is signed in to gh; on macOS or Linux, the same line in cron. The queue's lock keeps a late run from overlapping an early one.
 
 With a session open as well, `/loop 20m sh scripts/ci/merge-queue.sh --drain` still works; the lock refuses the second of two that overlap.
@@ -80,6 +80,14 @@ A pull request that adds a migration merges only after the migration has run. Th
 The serial queue merges a green pull request without a second CI run when main moved only outside its classes, and updates it for a re-run when main moved inside them. Some classes can never make CI red: `docs`, `specs` and `status`, named on the `!rerun-free` line of `classes.txt`. The queue ignores them on main's side. Without that, ten pull requests that each named a spec invalidated one another on every merge and went round CI one at a time, which is what this file exists to prevent. If your project has another class whose moves are harmless, add it to that line.
 
 A green pull request that merges cleanly onto main also merges without a second run when main moved in its classes, as long as main's newest run, on main's current commit, is green. The full run on main is the gate, as the rules say, and it opens the red-main issue if the two together fail. The re-run is kept only when main is red or its newest commit has not finished its run. One batch went through three full CI cycles for the same code under the old rule. `QUEUE_RERUN=classes` restores it: re-run whenever main moved in the pull request's classes.
+
+## Holding a pull request, pausing the schedule
+
+- **Hold one pull request.** A label `queue:hold` (or `hold`), or a line `Queue: hold` in its body, keeps a green pull request out of every drain and batch. `--serial N` refuses it too, unless a person gives a reason with `--because`. Remove the label or the line to release it.
+- **Pause the scheduled drain.** `sh scripts/ci/merge-queue.sh --pause 2h` (or `45m`) sets the repository variable `QUEUE_PAUSED_UNTIL`, and the scheduled drain skips itself until then; `--resume` ends the pause. A drain you run yourself still runs.
+- **A session's own drain** sets `QUEUE_LOCAL_DRAIN_UNTIL` while it works and clears it at the end, so the scheduled drain skips rather than racing it.
+
+Setting a repository variable needs a token that can administer the repository; the owner's own `gh` sign-in can.
 
 ## When to go serial
 

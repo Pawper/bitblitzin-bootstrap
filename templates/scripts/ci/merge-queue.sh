@@ -50,6 +50,7 @@ fi
 rules=$(cat "$here/classes.txt")
 
 mode=""
+pause_for=""
 base="main"
 prs=""
 because=""
@@ -57,6 +58,8 @@ then_deploy=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --batch) mode=batch ;;
+    --pause) shift; mode=pause; pause_for=$1 ;;
+    --resume) mode=resume ;;
     --serial) mode=serial ;;
     --drain) mode=drain ;;
     --drain-then-deploy) mode=drain; then_deploy=1 ;;
@@ -71,6 +74,28 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# set_repo_var NAME VALUE: a repository variable, which the scheduled
+# drain workflow reads as vars.NAME. Needs a token that can administer the
+# repository (the owner's own gh sign-in can).
+set_repo_var() {
+  gh api -X PATCH "repos/{owner}/{repo}/actions/variables/$1" -f name="$1" -f value="$2" >/dev/null 2>&1 \
+    || gh api -X POST "repos/{owner}/{repo}/actions/variables" -f name="$1" -f value="$2" >/dev/null 2>&1
+}
+iso_utc() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+case "$mode" in
+  pause)
+    pu=$(pause_until "$(date +%s)" "$pause_for")
+    [ -n "$pu" ] || { echo "Usage: sh scripts/ci/merge-queue.sh --pause 2h (or 45m, or minutes)"; exit 2; }
+    if set_repo_var QUEUE_PAUSED_UNTIL "$(iso_utc "$pu")"; then
+      echo "The scheduled drain is paused until $(date -d "@$pu" '+%H:%M' 2>/dev/null || iso_utc "$pu") (QUEUE_PAUSED_UNTIL). A drain you run yourself still runs. --resume ends the pause."
+      exit 0
+    fi
+    echo "Could not set the repository variable QUEUE_PAUSED_UNTIL; pausing needs a token that can administer the repository."; exit 1 ;;
+  resume)
+    set_repo_var QUEUE_PAUSED_UNTIL "" && { echo "The scheduled drain runs again from its next tick."; exit 0; }
+    echo "Could not clear QUEUE_PAUSED_UNTIL."; exit 1 ;;
+esac
+
 prs=$(batch_order $prs)
 [ -n "$prs" ] || [ "$mode" = drain ] || { echo "Usage: sh scripts/ci/merge-queue.sh [--batch | --serial | --drain] [--base BRANCH] PR..." >&2; exit 2; }
 count=$(printf '%s\n' "$prs" | wc -l | tr -d ' ')
@@ -479,8 +504,16 @@ sync_worktree() {
 }
 
 # serial_one PR: today's behavior for one PR.
+# pr_held PR: why this pull request is held, or nothing.
+pr_held() {
+  held_reason "$(gh api "repos/{owner}/{repo}/issues/$1/labels" --jq '.[].name' 2>/dev/null)" "$(gh api "repos/{owner}/{repo}/pulls/$1" --jq '.body // ""' 2>/dev/null)"
+}
+
 serial_one() {
   pr=$1
+  # Held: not merged, unless a person ran --serial with a reason.
+  hw=$(pr_held "$pr")
+  if [ -n "$hw" ] && { [ -n "$QUEUE_IN_DRAIN" ] || [ -z "$because" ]; }; then batch_line "$pr" "not merged" "$hw; remove the hold, or merge it with --serial $pr --because \"why\""; return 0; fi
   why=$(folder_blocks "$pr"); [ -n "$why" ] || why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; return 0; fi
   git fetch -q origin "$base" "pull/$pr/head"
@@ -615,6 +648,12 @@ take_lock
 if [ "$mode" = drain ]; then
   rounds=${rounds:-6}
   drain_minutes=${QUEUE_DRAIN_MINUTES:-90}
+  # A drain started in a session says so, so the scheduled drain skips
+  # instead of racing it; the mark is cleared when this drain ends.
+  if [ -z "${GITHUB_ACTIONS:-}" ]; then
+    set_repo_var QUEUE_LOCAL_DRAIN_UNTIL "$(iso_utc $(( $(date +%s) + drain_minutes * 60 )))" || true
+    trap 'set_repo_var QUEUE_LOCAL_DRAIN_UNTIL "" >/dev/null 2>&1 || true; unlock' EXIT
+  fi
   d_start=$(date +%s); round=0; tried=""; retried=""; attention=""; last_look=""
   d_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   while [ "$round" -lt "$rounds" ]; do
@@ -637,6 +676,18 @@ if [ "$mode" = drain ]; then
       say "Listing the open pull requests failed (${l_err:-no detail}); trying again in 60 seconds."
       sleep 60
     done
+    # Held pull requests (a queue:hold label or a "Queue: hold" line) wait,
+    # however green.
+    held=$(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))\t\((.body // "") | gsub("[\r\n]+"; " | "))"' 2>/dev/null \
+      | while IFS="$tab" read -r h_num h_labels h_body; do
+        [ -n "$(held_reason "$(printf '%s' "$h_labels" | tr ',' '\n')" "$(printf '%s' "$h_body" | sed 's/ | /\
+/g')")" ] && printf '%s ' "$h_num"
+      done)
+    if [ -n "$held" ]; then
+      [ "$held" = "${last_held:-}" ] || say "round $round: held, not merged:$(printf ' #%s' $held)"
+      last_held=$held
+      listed=$(drop_members "$listed" "$held")
+    fi
     # Open batches: their members are theirs, not the drain's. A batch one of
     # whose members has landed on its own no longer matches main; close it.
     members=""; settled=""
@@ -963,6 +1014,8 @@ if [ -n "$pairs" ]; then
   prs=$group
 fi
 for pr in $prs; do
+  hw=$(pr_held "$pr")
+  if [ -n "$hw" ]; then batch_line "$pr" "left out" "$hw"; continue; fi
   # Read fresh, not from the cache: a pull request merged or closed since
   # the list was made has nothing left to merge.
   pst=$(gh api "repos/{owner}/{repo}/pulls/$pr" --jq '"\(.state) \(.merged)"' 2>/dev/null || true)
