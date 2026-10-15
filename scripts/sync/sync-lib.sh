@@ -36,10 +36,14 @@ adopted_features() {
     END { s = ""; for (i = 1; i <= c; i++) if (order[i] in used) s = s (s == "" ? "" : " ") order[i]; print s }'
 }
 
-# default_paths OWNED
-# The config files with defaults: added when missing, never replaced.
+# default_paths OWNED [FEATURE]
+# The config files with defaults: added when missing, never replaced. A
+# default belongs to the feature it is listed under (core before any
+# feature line); with FEATURE, only that feature's.
 default_paths() {
-  printf '%s\n' "$1" | tr -d '\r' | awk '$1 == "default" && NF >= 2 { print $2 }'
+  printf '%s\n' "$1" | tr -d '\r' | awk -v want="${2:-}" '
+    $1 == "feature" && NF >= 2 { f = $2; next }
+    $1 == "default" && NF >= 2 { cur = (f == "" ? "core" : f); if (want == "" || cur == want) print $2 }'
 }
 
 # same_text A B

@@ -252,6 +252,6 @@ trim_section() {
 brief_sections() {
   case "$1" in
     clear) echo "main inprogress" ;;
-    *) echo "main prs queue inprogress leftover handoff owner proposal" ;;
+    *) echo "main prs queue inprogress leftover screens handoff owner proposal" ;;
   esac
 }

@@ -213,6 +213,14 @@ if has leftover && [ -f "$here/../../templates/OWNED.txt" ] && [ -f "$here/../..
   fi
 fi
 
+# Screens due a comparison across platforms: a file-pair check never says
+# that one platform's screen looks nothing like the other's.
+if has screens && [ -f scripts/ci/parity.txt ] && [ -f "$here/../../templates/scripts/design/design-lib.sh" ]; then
+  . "$here/../../templates/scripts/design/design-lib.sh"
+  due=$(stale_screens "$(parity_pairs "$(cat scripts/ci/parity.txt)")" "$(cat design/screens.txt 2>/dev/null)" "$(date +%Y-%m-%d)" 14 | head -n 6 | paste -sd';' - | sed 's/;/; /g')
+  [ -z "$due" ] || add "Screens not compared across platforms in 14 days: $due. After comparing: sh scripts/design/screens.sh compare NAME"
+fi
+
 # Last handoff
 if has handoff && [ -n "$memory_dir" ] && [ -d "$memory_dir" ]; then
   listing=$(for f in "$memory_dir"/handoff-*; do

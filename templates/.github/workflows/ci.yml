@@ -109,6 +109,17 @@ jobs:
       - name: Fail when a client file hands process.env to anything whole
         if: github.event_name == 'pull_request' && (contains(steps.classes.outputs.classes, 'app') || contains(steps.classes.outputs.classes, 'other'))
         run: sh scripts/ci/client-env-check.sh
+      - name: Fail when a screen gains a literal colour, size or font, or the design files are stale
+        # Only in a project with design/tokens.json: the generated design
+        # tables are current, no UI file added a raw value, and each screen
+        # pair the change touches names the same type roles on both sides.
+        if: github.event_name == 'pull_request' && hashFiles('design/tokens.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SPEC_TEXT=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" --jq '.title + "\n" + (.body // "")' 2>/dev/null) || SPEC_TEXT="${{ github.event.pull_request.title }}"
+          export SPEC_TEXT
+          sh scripts/ci/design-check.sh "$BASE" "${{ github.sha }}"
       # A project with data or docs checks of its own adds them here as
       # steps, with "if: contains(steps.classes.outputs.classes, 'data')"
       # (or 'docs'). Never repeat a step above.

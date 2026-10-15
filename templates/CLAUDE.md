@@ -40,6 +40,7 @@ Many agents work here at once. Each kind of thing has one home, every rule has s
 - A clean folder is part of done. Before you report finished or open a pull request, `git status` shows nothing outside `.scratch/`. Commit the files, or list them in the pull request as deliberately left out.
 - One scratch folder, `.scratch/`, which git ignores. Probe scripts, screenshots and notes go there and nowhere else, so any other untracked file means real work. Stage with `git add -A`; `git add .scratch` fails because the folder is ignored, and that is right.
 - Images and build output never go in a worktree. They belong in the work folder outside the repository. The production build runs in CI's `app` job on every pull request that touches the app; to build by hand, build in the batch worktree or a copy under `.scratch/`, never in a task's worktree.
+- A screen uses a token or a type role by name, never a literal colour, size or font; the look lives in `design/tokens.json` and is generated into every platform (`node scripts/design/generate.mjs`). A type role is the unit: a screen says `type-rowClaim` or `DesignType.RowClaim`, and the size lives in the tokens. A colour chosen by data is a core rule, with fixtures; a colour chosen by design is a token.
 - A fix to shared code gets its own issue and its own pull request. Never patch shared code to get your own build through and ship only your part.
 - Stop what you started. Any server or watcher you started from a worktree ends before you finish. Never stop a build daemon (`gradlew --stop`, `nx reset`): it is shared by every build on the machine, including a self-hosted runner's job in flight.
 - Never move a branch from outside its worktree, never add a detached worktree, and never close a pull request without a comment saying why or what replaced it; `sh scripts/worktrees.sh close PR "reason"` does the whole ending.
@@ -72,6 +73,7 @@ Many agents work here at once. Each kind of thing has one home, every rule has s
 | A session starts from facts | The `session-brief` hook prints main, open PRs, the queue, what is in progress, the last handoff and what waits on the owner at every session start; `.claude/session-brief.json` tells it where to look |
 | A setup change carries its line | The `setup-check` step of the `checks` CI job fails a PR that changes a file in `scripts/ci/setup-paths.txt` without changing `SETUP.md` |
 | A source change belongs to a spec | The `spec-check` step of the `checks` CI job fails a PR that changes `src/` without naming its spec in the body or changing a `specs/<feature>/` folder; the queue ignores moves on main in the `docs`, `specs` and `status` classes, so naming a spec never costs another PR a re-run |
+| The look has one source | The `design` step of the `checks` CI job fails a PR that adds a raw colour, size or font to a UI file, that leaves a generated design file stale, or whose screen pair names different type roles on its two platforms; the brief names screen pairs not compared by eye in 14 days |
 | Line endings stay LF | `.gitattributes` forces it and the `line-endings` step of the `checks` CI job fails on any CRLF file |
 | Nothing drifts quietly | The nightly `audit` workflow comments on the issue labeled `audit` when an issue has no State, a merged PR left one stale, or a red-main issue is still open, and says nothing when clean |
 
@@ -89,6 +91,7 @@ The hooks come from the `bitblitzin-bootstrap` plugin. If a hook refuses a comma
 - Check it is current: `sh status/check.sh`
 - Run one test file: `TEST_COMMAND path/to/file`
 - Classify a change: `sh scripts/ci/classify.sh`
+- Regenerate the design tables from `design/tokens.json`: `node scripts/design/generate.mjs` (`--check` in CI); record a cross-platform screen comparison: `sh scripts/design/screens.sh compare NAME`
 - Open the owner console: `node "$CLAUDE_PLUGIN_ROOT/console/cli.js" console`; check its config: `node "$CLAUDE_PLUGIN_ROOT/console/cli.js" console --check`. Adding a service means adding an entry to `console/services.json`.
 - Where every open issue and pull request really stands: `/project-status`. Light readers summarize bodies and comments, only for items that changed; you keep one line per item. Do not read the item files yourself.
 - Propose the next round: `/project-drive`. It reads the board and the checks, proposes, and does nothing until a person approves in the session or on the issue labeled `drive`. Config in `.claude/project-drive.json`.
