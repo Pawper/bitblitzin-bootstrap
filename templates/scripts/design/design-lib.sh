@@ -118,6 +118,9 @@ stale_screens() {
   printf '%s\n' "$1" | awk -F'\t' 'NF >= 1 && $1 != "" { print $1 }' | while IFS= read -r ss_n; do
     ss_date=$(printf '%s\n' "$2" | tr -d '\r' | awk -v n="$ss_n" '!/^[[:space:]]*#/ && $1 == n { d = $2 } END { print d }')
     if [ -z "$ss_date" ]; then printf '99999\t%s: never\n' "$ss_n"
-    else ss_age=$(( ss_today - $(day_number "$ss_date") )); [ "$ss_age" -gt "${4:-14}" ] && printf '%s\t%s: %s days\n' "$ss_age" "$ss_n" "$ss_age"; fi
+    else
+      ss_age=$(( ss_today - $(day_number "$ss_date") ))
+      if [ "$ss_age" -gt "${4:-14}" ]; then printf '%s\t%s: %s days\n' "$ss_age" "$ss_n" "$ss_age"; fi
+    fi
   done | sort -t"$(printf '\t')" -k1,1nr | cut -f2
 }

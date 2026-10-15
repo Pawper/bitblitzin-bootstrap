@@ -41,7 +41,7 @@ here=$(dirname "$0")
 if [ -z "$QUEUE_FROM_COPY" ]; then
   qc=$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/queue-$$")
   mkdir -p "$qc/ci" && cp "$here"/* "$qc/ci/" 2>/dev/null
-  for f in worktrees.sh worktrees-lib.sh; do [ -f "$here/../$f" ] && cp "$here/../$f" "$qc/"; done
+  for f in worktrees.sh worktrees-lib.sh; do if [ -f "$here/../$f" ]; then cp "$here/../$f" "$qc/"; fi; done
   QUEUE_FROM_COPY=1; export QUEUE_FROM_COPY
   exec sh "$qc/ci/merge-queue.sh" "$@"
 fi
@@ -635,7 +635,7 @@ typecheck_ok() {
   tc_root=${2:-.}
   : > "$flaky_dir/typecheck.err"
   if [ -n "$QUEUE_TYPECHECK_COMMAND" ] || [ -z "$ts_roots" ]; then (cd "$tc_root" && sh -c "$typecheck") >"$flaky_dir/typecheck.err" 2>&1; return $?; fi
-  tc_dirs=$(printf '%s\n' "$1" | while IFS= read -r tc_f; do [ -n "$tc_f" ] && nearest_root "$tc_f" "$ts_roots"; done | sort -u)
+  tc_dirs=$(printf '%s\n' "$1" | while IFS= read -r tc_f; do if [ -n "$tc_f" ]; then nearest_root "$tc_f" "$ts_roots"; fi; done | sort -u)
   for tc_d in $tc_dirs; do
     [ -f "$tc_root/$tc_d/tsconfig.json" ] || continue
     (cd "$tc_root/$tc_d" && sh -c "$typecheck") >"$flaky_dir/typecheck.err" 2>&1 || return 1
@@ -729,7 +729,7 @@ if [ "$mode" = drain ]; then
     for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select((.body // "") | (contains("<!-- merge-queue:batch -->") or startswith("One integration run for the pull requests below"))) | .number' 2>/dev/null); do
       bm=$(batch_members "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq '.body // ""' 2>/dev/null)")
       landed=""
-      for m in $bm; do [ "$(gh api "repos/{owner}/{repo}/pulls/$m" --jq '.merged' 2>/dev/null)" = true ] && landed="$landed #$m"; done
+      for m in $bm; do if [ "$(gh api "repos/{owner}/{repo}/pulls/$m" --jq '.merged' 2>/dev/null)" = true ]; then landed="$landed #$m"; fi; done
       # Only one queue runs and a batch finishes within its round, so an
       # open batch here was left by an earlier run. Settle it.
       bstate=$(required_on "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq .head.sha 2>/dev/null)")
@@ -751,6 +751,7 @@ if [ "$mode" = drain ]; then
         say "round $round: batch #$bp is still running CI; its members$(printf ' #%s' $bm) wait for it."
       fi
     done
+    queue_step="drain round $round: reading each pull request's state"
     listed=$(drop_members "$listed" "$members $settled")
     open=$(printf '%s\n' "$listed" | while IFS="$tab" read -r o_num o_draft o_sha o_base; do
       [ -n "$o_num" ] || continue
@@ -764,6 +765,7 @@ if [ "$mode" = drain ]; then
       printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$o_mw" "$(pr_rollup "$o_sha")" "$o_base"
     done)
     rate_ok
+    queue_step="drain round $round: re-running failed jobs"
     # A red pull request gets one retry of its failed jobs; a second red,
     # or a conflict, is collected and named when the drain ends.
     for r in $(drain_retry "$open" "$base" "$retried"); do
@@ -777,6 +779,7 @@ if [ "$mode" = drain ]; then
     attention=$(printf '%s
 %s
 ' "$attention" "$(drain_attention "$open" "$base" "$retried")" | sed '/^$/d' | sort -u -n)
+    queue_step="drain round $round: choosing what to merge"
     pick=$(drain_candidates "$open" "$base" "$tried")
     waiting=$(drain_waiting "$open" "$base" "$retried")
     n=$(printf '%s\n' "$pick" | sed '/^$/d' | wc -l | tr -d ' ')
@@ -829,6 +832,7 @@ if [ "$mode" = drain ]; then
       break
     fi
     last_look=""
+    queue_step="drain round $round: merging"
     say "round $round: $n green pull request(s): $(printf '%s' "$pick" | tr '\n' ' ')"
     QUEUE_IN_DRAIN=1; export QUEUE_IN_DRAIN
     if [ "$n" -ge 2 ]; then sh "$0" --batch --base "$base" $pick 2>&1 | tee -a "$log_file" || true; else sh "$0" --serial --base "$base" $pick 2>&1 | tee -a "$log_file" || true; fi
@@ -1170,7 +1174,7 @@ close_pr() { # NUMBER REASON
   gh api -X PATCH "repos/{owner}/{repo}/pulls/$1" -f state=closed >/dev/null 2>&1 && echo "closed batch PR #$1: $2"
 }
 gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select((.body // "") | (contains("<!-- merge-queue:batch -->") or startswith("One integration run for the pull requests below"))) | .number' 2>/dev/null \
-  | while read -r old; do [ -n "$old" ] && close_pr "$old" "Superseded by a new batch from the queue; its members are carried there if still green."; done
+  | while read -r old; do if [ -n "$old" ]; then close_pr "$old" "Superseded by a new batch from the queue; its members are carried there if still green."; fi; done
 
 git -C "$wt" push -q -u origin "$branch"
 body=$(batch_pr_body "$carried" "$refs")

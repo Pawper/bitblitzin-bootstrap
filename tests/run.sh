@@ -888,6 +888,11 @@ tail_tests=$(cd "$root" && for f in $(git ls-files '*.sh'); do
   awk -v f="$f" '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i] !~ /\][ \t]*&&/ || l[i] ~ /\|\|/) continue; j = i + 1; while (j <= NR && l[j] ~ /^[ \t]*(#.*)?$/) j++; if (j <= NR && l[j] ~ /^[ \t]*done/) printf "%s:%d\n", f, i } }' "$f"
 done)
 eq "no loop in any script ends on a bare test" "" "$tail_tests"
+# The same on one line: "do [ test ] && cmd; done". The settle loop after a
+# merged batch ended the next round that way (its members read as closed,
+# not merged, for a moment).
+oneline_tests=$(cd "$root" && grep -rnE 'do .*\] *&& [^|]*; *done' --include='*.sh' templates hooks scripts status 2>/dev/null | grep -v '||' | cut -d: -f1,2)
+eq "nor any one-line loop" "" "$oneline_tests"
 eq "the queue never stops without a word, on screen and in its log" "2" "$(grep -c 'stopped (exit \$qe_rc) during: \$queue_step' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the hold scan ends on an if" "1" "$(grep -c 'if \[ -n "\$h_why" \]; then printf' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "--serial by hand waits for checks already running" "1" "$(grep -c 'its checks are still running; waiting for them' "$root/templates/scripts/ci/merge-queue.sh")"
