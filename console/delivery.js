@@ -50,8 +50,18 @@ function minutes(x) {
 // rollup(CHECK_RUNS): one word for a commit's checks, as the queue reads
 // them: red on any failure, pending while any runs, green when all passed
 // or were skipped, cancelled when only cancellations stand in the way.
-function rollup(runs) {
-  if (!runs || !runs.length) return 'none';
+function rollup(all) {
+  if (!all || !all.length) return 'none';
+  // Only each check's newest attempt counts: GitHub lists every attempt on
+  // a commit, so a red run that was re-run kept the dot red while the new
+  // run was still going.
+  const newest = {};
+  all.forEach((r, i) => {
+    const k = r.name || `#${r.id || i}`;
+    const at = Date.parse(r.started_at || '') || r.id || 0;
+    if (!newest[k] || at >= newest[k].at) newest[k] = { at, r };
+  });
+  const runs = Object.values(newest).map((x) => x.r);
   const bad = ['failure', 'timed_out', 'startup_failure', 'action_required'];
   if (runs.some((r) => bad.includes(r.conclusion))) return 'red';
   if (runs.some((r) => r.status !== 'completed')) return 'pending';
@@ -318,7 +328,7 @@ async function gather(root, opts) {
   const o = opts || {};
   const key = `${root}|${o.queueOnly ? 'q' : 'all'}`;
   const hit = cache.get(key);
-  const life = o.queueOnly ? 60000 : 300000;
+  const life = o.queueOnly ? 20000 : 300000;
   if (hit && !o.fresh && Date.now() - hit.at < life) return hit.raw;
 
   const raw = { read: [] };
@@ -351,18 +361,27 @@ async function gather(root, opts) {
         jobsTotal: list.length,
       };
     }));
-    // What each runner is doing: the jobs of runs still going. A handful
-    // of calls, and only while something runs.
-    const [runnersNow, active] = await Promise.all([
-      gh(root, ['repos/{owner}/{repo}/actions/runners']),
-      gh(root, ['repos/{owner}/{repo}/actions/runs?per_page=50&status=in_progress']),
-    ]);
-    const queuedRuns = await gh(root, ['repos/{owner}/{repo}/actions/runs?per_page=50&status=queued']);
+    // What each runner is doing: the jobs of every run not finished, of any
+    // event (a pull request, a push, a workflow_run like a store upload,
+    // a schedule), read on the same tick as the runners' busy flags. A
+    // busy runner no job names is read once more, since a job can start
+    // between two reads; one still unmatched is said as such.
+    const unfinished = ['in_progress', 'queued', 'waiting', 'requested', 'pending'];
+    const readJobs = async () => {
+      const lists = await Promise.all(unfinished.map((st) => gh(root, [`repos/{owner}/{repo}/actions/runs?per_page=50&status=${st}`])));
+      const seen = new Set();
+      const runs = [];
+      lists.forEach((l) => ((l && l.workflow_runs) || []).forEach((r) => { if (!seen.has(r.id)) { seen.add(r.id); runs.push(r); } }));
+      const jobLists = await Promise.all(runs.slice(0, 30).map((r) => gh(root, [`repos/{owner}/{repo}/actions/runs/${r.id}/jobs?filter=latest&per_page=100`])));
+      const jobs = [];
+      jobLists.forEach((l) => ((l && l.jobs) || []).forEach((j) => jobs.push(j)));
+      return jobs;
+    };
+    const [runnersNow, firstJobs] = await Promise.all([gh(root, ['repos/{owner}/{repo}/actions/runners']), readJobs()]);
     raw.runners = runnersNow && runnersNow.runners ? runnersNow.runners : null;
-    const liveRuns = [...((active && active.workflow_runs) || []), ...((queuedRuns && queuedRuns.workflow_runs) || [])].slice(0, 20);
-    const liveJobs = await Promise.all(liveRuns.map((r) => gh(root, [`repos/{owner}/{repo}/actions/runs/${r.id}/jobs?per_page=100`])));
-    raw.activeJobs = [];
-    liveJobs.forEach((l) => ((l && l.jobs) || []).forEach((j) => raw.activeJobs.push(j)));
+    raw.activeJobs = firstJobs;
+    const named = (jobs) => new Set(jobs.filter((j) => j.status !== 'completed' && j.runner_name).map((j) => j.runner_name));
+    if ((raw.runners || []).some((r) => r.busy && !named(raw.activeJobs).has(r.name))) raw.activeJobs = await readJobs();
     if (!o.queueOnly) {
       const since = new Date(Date.now() - WINDOW_DAYS * DAY).toISOString().slice(0, 10);
       const [runs, closed] = await Promise.all([

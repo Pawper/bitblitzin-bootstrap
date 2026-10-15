@@ -33,6 +33,17 @@ test('rollup reads checks as the queue does', () => {
   assert.equal(d.rollup([{ status: 'completed', conclusion: 'cancelled' }]), 'cancelled');
 });
 
+test('a re-run is judged by its newest attempt, and a run still going is pending', () => {
+  const runs = [
+    { id: 1, name: 'app', status: 'completed', conclusion: 'failure', started_at: '2026-10-15T10:00:00Z' },
+    { id: 5, name: 'app', status: 'in_progress', started_at: '2026-10-15T11:00:00Z' },
+    { id: 6, name: 'checks', status: 'completed', conclusion: 'success', started_at: '2026-10-15T11:00:00Z' },
+    { id: 7, name: 'full', status: 'completed', conclusion: 'skipped', started_at: '2026-10-15T11:00:00Z' },
+  ];
+  assert.equal(d.rollup(runs), 'pending', 'no CI passed yet and app running: pending, not red');
+  assert.equal(d.rollup([...runs, { id: 9, name: 'app', status: 'completed', conclusion: 'failure', started_at: '2026-10-15T11:05:00Z' }]), 'red');
+});
+
 test('what landed on main, and how', () => {
   assert.equal(d.mergedNumber('Fix the chime (#79) [serial: alone]'), 79);
   assert.equal(d.mergedNumber('Merge pull request #77 from Pawper/x'), 77);
@@ -157,11 +168,18 @@ test('the batch PR jobs belong to the batch, and CI passed is not work', () => {
   assert.deepEqual(r.waiting.map((w) => [w.pr, w.name]), [[12, 'CI passed']], 'CI passed waits only when it is all that is left in its run');
 });
 
+test('every poll repaints and says when, or why not', () => {
+  assert.ok(qv.QUEUE_JS.includes("stamp('updated '"));
+  assert.ok(qv.QUEUE_JS.includes("stamp('could not redraw: '"));
+  assert.ok(qv.QUEUE_JS.includes("stamp('could not read the queue: '"));
+});
+
 test('the queue picture explains each job', () => {
   assert.doesNotThrow(() => new Function(qv.QUEUE_JS), 'the page script parses');
   assert.ok(qv.QUEUE_JS.includes('JOB_TIPS'));
   assert.ok(qv.QUEUE_JS.includes("'drain': 'The merge queue on its timer"));
-  assert.ok(qv.QUEUE_JS.includes('busy with a job not listed here'));
+  assert.ok(qv.QUEUE_JS.includes('busy; job not matched'));
+  assert.ok(!qv.QUEUE_JS.includes('another repository, or a run older'), 'no guessed cause');
 });
 
 test('the demo shows runners at work', () => {

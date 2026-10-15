@@ -447,3 +447,9 @@ pause_until() {
   case "$pu_n" in ''|*[!0-9]*) return 0 ;; esac
   echo $(( $1 + pu_n * pu_m * 60 ))
 }
+
+# release_workflows DEPLOY_JSON: the release workflows listed under
+# "releases" in .claude/deploy.json, one a line (also in sync-lib.sh).
+release_workflows() {
+  printf '%s' "$1" | tr -d '\r\n' | sed -n 's/.*"releases"[ \t]*:[ \t]*\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | sed 's/[" \t]//g; /^$/d'
+}

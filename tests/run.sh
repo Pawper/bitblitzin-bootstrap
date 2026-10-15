@@ -864,6 +864,14 @@ eq "bare minutes" "5400" "$(pause_until 0 90)"
 eq "a length it cannot read pauses nothing" "" "$(pause_until 0 soon)"
 eq "the drain, a batch and --serial all honour a hold" "3" "$(grep -c 'held_reason\|pr_held "\$pr"' "$root/templates/scripts/ci/merge-queue.sh" | awk '{print ($1 >= 3) ? 3 : $1}')"
 eq "the scheduled drain skips while paused or a session drains" "1" "$(grep -c 'vars.QUEUE_PAUSED_UNTIL }}" "\${{ vars.QUEUE_LOCAL_DRAIN_UNTIL' "$root/templates/.github/workflows/queue-drain.yml")"
+eq "a release on workflow_run of CI is per merge" "yes" "$(. "$root/scripts/sync/sync-lib.sh"; per_merge_release "$(printf 'on:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n    branches: [main]\n')")"
+eq "quoted CI too" "yes" "$(. "$root/scripts/sync/sync-lib.sh"; per_merge_release "$(printf 'on:\n  workflow_run:\n    workflows: [\"CI\"]\n')")"
+eq "a release that follows Deploy is not" "" "$(. "$root/scripts/sync/sync-lib.sh"; per_merge_release "$(printf 'on:\n  workflow_run:\n    workflows: [Deploy]\n  workflow_dispatch:\n')")"
+eq "nor a workflow named CI elsewhere" "" "$(. "$root/scripts/sync/sync-lib.sh"; per_merge_release "$(printf 'name: CI\non:\n  push:\n')")"
+eq "the release workflows in deploy.json" "play-internal.yml
+app-distribution.yml" "$(release_workflows '{"path": "guard", "releases": ["play-internal.yml", "app-distribution.yml"]}')"
+eq "none listed, none started" "" "$(release_workflows '{"path": "guard"}')"
+eq "--deploy starts the listed releases when no Deploy run will" "1" "$(grep -c 'Started the release workflow' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the drain runs hosted by default" "1" "$(grep -c "runs-on: \${{ vars.QUEUE_RUNS_ON || 'ubuntu-latest' }}" "$root/templates/.github/workflows/queue-drain.yml")"
 eq "and skips itself after a recent drain, or while paused" "2" "$(grep -c 'skipping this one' "$root/templates/.github/workflows/queue-drain.yml")"
 eq "the batch checkout links packages only when the lockfiles match" "1" "$(grep -c 'if \[ "\$em_lock" = "\$em_main" \] && \[ -d "\$main_dir/\$d/node_modules" \]' "$root/templates/scripts/ci/merge-queue.sh")"
@@ -873,6 +881,15 @@ eq "the project's install command can be named" "1" "$(grep -c 'QUEUE_INSTALL_CO
 eq "a lagging pull ref falls back to the branch" "1" "$(grep -c 'fetch -q origin "+refs/heads/$fph_branch:refs/queue/pr-$1"' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "and is said as lagging, never 'try again'" "0" "$(grep -c 'try again' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the gate and the batch use the same fetch" "3" "$(grep -c 'fetch_pr_head "' "$root/templates/scripts/ci/merge-queue.sh")"
+# A loop whose last command is "[ test ] && cmd" returns 1 when the test is
+# false; inside $(...) under set -e that ends the script without a word.
+# It did, three times (worktrees.sh close, --serial, the hold scan).
+tail_tests=$(cd "$root" && for f in $(git ls-files '*.sh'); do
+  awk -v f="$f" '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i] !~ /\][ \t]*&&/ || l[i] ~ /\|\|/) continue; j = i + 1; while (j <= NR && l[j] ~ /^[ \t]*(#.*)?$/) j++; if (j <= NR && l[j] ~ /^[ \t]*done/) printf "%s:%d\n", f, i } }' "$f"
+done)
+eq "no loop in any script ends on a bare test" "" "$tail_tests"
+eq "the queue never stops without a word, on screen and in its log" "2" "$(grep -c 'stopped (exit \$qe_rc) during: \$queue_step' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the hold scan ends on an if" "1" "$(grep -c 'if \[ -n "\$h_why" \]; then printf' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "--serial by hand waits for checks already running" "1" "$(grep -c 'its checks are still running; waiting for them' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "and for a pending required check" "1" "$(grep -c 'is still running; waiting for it, then merging' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a drain never waits on one pull request" "2" "$(grep -c '\[ -z "\$QUEUE_IN_DRAIN" \] && \[ -z "\${serial_waited:-}" \]' "$root/templates/scripts/ci/merge-queue.sh")"

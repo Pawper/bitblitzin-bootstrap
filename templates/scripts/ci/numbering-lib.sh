@@ -26,7 +26,7 @@ numbers_in() {
     case "$ni_p" in $2) ;; *) continue ;; esac
     ni_base=${ni_p##*/}
     ni_num=$(printf '%s' "$ni_base" | sed -n 's/^\([0-9][0-9]*\).*/\1/p')
-    [ -n "$ni_num" ] && printf '%s\n' "$ni_num"
+    if [ -n "$ni_num" ]; then printf '%s\n' "$ni_num"; fi
   done)
   set +f
   [ -n "$ni_out" ] && printf '%s\n' "$ni_out"
@@ -54,7 +54,7 @@ duplicate_numbers() {
     case "$dn_p" in $2) ;; *) continue ;; esac
     dn_num=$(printf '%s' "${dn_p##*/}" | sed -n 's/^\([0-9][0-9]*\).*/\1/p')
     # Compare by value, so 22 and 0022 are the same number.
-    [ -n "$dn_num" ] && printf '%s\t%s\n' "$(printf '%s' "$dn_num" | sed 's/^0*//; s/^$/0/')" "${dn_p##*/}"
+    if [ -n "$dn_num" ]; then printf '%s\t%s\n' "$(printf '%s' "$dn_num" | sed 's/^0*//; s/^$/0/')" "${dn_p##*/}"; fi
   done)
   set +f
   printf '%s\n' "$dn_rows" | awk -F'\t' '

@@ -161,3 +161,24 @@ FPEOF
 control_bytes() {
   if printf '%s' "$1" | LC_ALL=C tr -d '\011\012\015' | LC_ALL=C grep -q '[[:cntrl:]]'; then echo yes; else echo no; fi
 }
+
+# per_merge_release WORKFLOW_TEXT
+# Print "yes" when a workflow starts on workflow_run of CI: then every
+# merge to main builds and ships a release. One project uploaded 29 Play
+# versions in an afternoon that way, each a full Gradle build on a
+# self-hosted runner. A release follows Deploy (workflow_run of Deploy,
+# plus workflow_dispatch), which the queue starts once per drain.
+per_merge_release() {
+  printf '%s\n' "$1" | tr -d '\r' | awk '
+    /^[ \t]*workflow_run:/ { inrun = 1; next }
+    inrun && /^[ \t]*workflows:/ { if ($0 ~ /[\[ ,"\x27]CI[\] ,"\x27]|[\[ ,"\x27]CI$/) found = 1 }
+    inrun && /^[^ \t]/ { inrun = 0 }
+    END { if (found) print "yes" }'
+}
+
+# release_workflows DEPLOY_JSON
+# The release workflows a project lists in .claude/deploy.json under
+# "releases" (["play-internal.yml", "app-distribution.yml"]), one a line.
+release_workflows() {
+  printf '%s' "$1" | tr -d '\r\n' | sed -n 's/.*"releases"[ \t]*:[ \t]*\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | sed 's/[" \t]//g; /^$/d'
+}

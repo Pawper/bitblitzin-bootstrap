@@ -45,7 +45,7 @@ for tool in git node gh; do
       printf '%s' "$machine_path" | tr ';' '\n' | while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         u=$(cygpath -u "$entry" 2>/dev/null || printf '%s' "$entry")
-        for ext in "" .exe .cmd .bat; do [ -x "$u/$tool$ext" ] && { echo found; break; }; done
+        for ext in "" .exe .cmd .bat; do if [ -x "$u/$tool$ext" ]; then echo found; break; fi; done
       done | grep -q found && verdict=ok
     fi
     say "$verdict" "$tool: $found$( [ "$verdict" = warn ] && printf ' (not on the machine PATH, so the runner service may not find it)')"

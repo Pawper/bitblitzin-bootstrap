@@ -106,6 +106,7 @@ const QUEUE_CSS = `
 .mq-chip[data-state=conflict] { border-color: var(--mq-red); }
 .mq-chip[data-state=conflict] .mq-dot { background: var(--mq-red); border-radius: 2px; transform: rotate(45deg); }
 .mq-lane.busy .job { color: var(--mq-ink); }
+.mq-foot[data-updated]::after { content: " · " attr(data-updated); opacity: .7; }
 .mq-foot { margin-top: 14px; color: var(--mq-soft); font-size: 12px; min-height: 1.4em; }
 .mq-empty { position: absolute; left: 0; right: 0; top: 40%; text-align: center; color: var(--mq-soft); font-size: 12px; padding: 0 10px; transition: opacity .4s ease; }
 .mq.still .mq-chip, .mq.still .mq-box { transition: none; }
@@ -388,10 +389,10 @@ const QUEUE_JS = `
       el.style.setProperty('--lane', color);
       el.querySelector('.rn').textContent = r.name;
       var job = r.job, slot = el.querySelector('.slot'), what = el.querySelector('.what');
-      what.textContent = r.status === 'offline' ? 'offline' : job ? jobWords(job) : r.status === 'busy' ? 'busy with a job not listed here' : 'idle';
+      what.textContent = r.status === 'offline' ? 'offline' : job ? jobWords(job) : r.status === 'busy' ? 'busy; job not matched' : 'idle';
       what.dataset.tip = r.status === 'offline' ? 'This runner is not connected to GitHub, so it takes no jobs.'
         : job ? jobTip(job)
-        : r.status === 'busy' ? 'GitHub says this runner is busy, but its job is not among the runs this page reads: another repository, or a run older than the newest fifty.'
+        : r.status === 'busy' ? 'GitHub says this runner is busy, and no unfinished job this page read names it, even after reading again.'
         : 'Free: it takes the next job in the waiting line.';
       var p = job ? pillFor(job, batchNo) : null;
       if (p && p.isBatch) batchColor = batchColor || color;
@@ -430,10 +431,22 @@ const QUEUE_JS = `
     root.classList.add('still');
     requestAnimationFrame(function () { mq.draw(data.state); requestAnimationFrame(function () { root.classList.remove('still'); }); });
     if (data.poll) {
-      setInterval(function () {
-        fetch(data.poll, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (s) { if (s) mq.draw(s); }).catch(function () {});
-      }, data.every || 30000);
+      // Every poll repaints and says when; a redraw that fails says so on
+      // the card instead of leaving the last picture up as if it were now.
+      var stamp = function (text) {
+        var f = root.querySelector('.mq-foot');
+        if (f) f.dataset.updated = text;
+      };
+      var tick = function () {
+        fetch(data.poll, { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('the console answered ' + r.status)); })
+          .then(function (s) {
+            try { mq.draw(s); stamp('updated ' + new Date().toLocaleTimeString()); }
+            catch (e) { stamp('could not redraw: ' + e.message); }
+          })
+          .catch(function (e) { stamp('could not read the queue: ' + (e && e.message ? e.message : 'no answer')); });
+      };
+      stamp('updated ' + new Date().toLocaleTimeString());
+      setInterval(tick, data.every || 30000);
     }
     if (data.demo) {
       var i = 0;
