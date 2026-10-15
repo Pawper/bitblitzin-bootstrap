@@ -33,10 +33,14 @@ tests_for_diff() {
 # batch_branch_name DATE [N]
 # "batch-2026-10-03", or "batch-2026-10-03-2" for the second batch of a day.
 batch_branch_name() {
+  # DAY [N] [STAMP]: with STAMP (the time, HHMMSS) every run gets its own
+  # branch, so a leftover branch from an earlier run never makes the push
+  # fail as non-fast-forward.
+  bb_s=${3:+-$3}
   if [ -n "$2" ] && [ "$2" -gt 1 ] 2>/dev/null; then
-    printf 'batch-%s-%s\n' "$1" "$2"
+    printf 'batch-%s%s-%s\n' "$1" "$bb_s" "$2"
   else
-    printf 'batch-%s\n' "$1"
+    printf 'batch-%s%s\n' "$1" "$bb_s"
   fi
 }
 
@@ -47,7 +51,8 @@ batch_branch_name() {
 # A batch body without them failed spec-check on every src-only batch and
 # left every member's issue open after the merge.
 carried_refs() {
-  printf '%s\n' "$1" | tr -d '\r' | awk '
+  printf '%s\n' "$1" | tr -d '\r' | awk -v ks="${QUEUE_CARRY_KEYS:-Parity Twin}" '
+    BEGIN { nk = split(ks, keys, " ") }
     {
       line = $0
       while (match(tolower(line), /(close[sd]?|fix(e[sd])?|resolve[sd]?)[ \t]+#[0-9]+/)) {
@@ -59,6 +64,15 @@ carried_refs() {
         m = substr($0, RSTART, RLENGTH); sub(/^[Ss]pec:[ \t]*/, "", m)
         out = "Spec: " m; if (!(out in seen)) { seen[out] = 1; print out }
       }
+      # A project escape lines ride along whole: a batch whose body
+      # lacked a member "Parity:" line failed the member drift guard,
+      # 23 batches in one night on one project.
+      for (i = 1; i <= nk; i++) {
+        if (match($0, "^[ \t]*" keys[i] ":")) {
+          out = $0; sub(/^[ \t]+/, "", out); sub(/[ \t]+$/, "", out)
+          if (!(out in seen)) { seen[out] = 1; print out }
+        }
+      }
     }'
 }
 
@@ -69,12 +83,28 @@ carried_refs() {
 # lines, so the batch passes spec-check whenever its members did and
 # merging it closes their issues as well as the pull requests.
 batch_pr_body() {
+  printf '%s\n' "$BATCH_MARKER"
   printf 'One integration run for the pull requests below, merged in this order with merge commits. Each keeps its own history; the full suite runs once here.\n\n'
   printf '%s\n' "$1" | awk -F'\t' 'NF >= 1 && $1 != "" { printf "- #%s %s. Closes #%s\n", $1, $2, $1 }'
   if [ -n "$(printf '%s' "$2" | tr -d ' \n\r\t')" ]; then
     printf '\nCarried from the members:\n\n'
     printf '%s\n' "$2" | awk 'NF && !seen[$0]++'
   fi
+}
+
+# BATCH_MARKER is the first line of every batch body the queue writes. A
+# batch is known by it, never by its branch name: a project branch called
+# batch-escape-lines-483 was taken for a batch and closed.
+BATCH_MARKER='<!-- merge-queue:batch -->'
+
+# is_batch_body BODY
+# Print "yes" when BODY is a batch the queue opened: its marker, or the
+# first sentence batches opened before the marker had.
+is_batch_body() {
+  case "$1" in
+    *"$BATCH_MARKER"*|"One integration run for the pull requests below"*) echo yes ;;
+  esac
+  return 0
 }
 
 # batch_line NUMBER OUTCOME [WHY]

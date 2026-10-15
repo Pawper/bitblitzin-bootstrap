@@ -840,6 +840,27 @@ Closes #64')"
 eq "fixes and resolves are carried as closes, once each" "Closes #12
 Closes #13" "$(carried_refs 'Fixes #12, resolves #13 and closes #12')"
 eq "a member's spec is carried" "Spec: specs/004-dashboard" "$(carried_refs 'Spec: specs/004-dashboard')"
+eq "a member's escape lines ride along whole" "Spec: specs/004-dashboard
+Parity: copy only, no logic change
+Twin: web/src/a.ts mirrors app/src/a.ts" "$(carried_refs 'Spec: specs/004-dashboard
+  Parity: copy only, no logic change
+Twin: web/src/a.ts mirrors app/src/a.ts')"
+eq "a project names its own escape keys" "Waiver: perf budget" "$(QUEUE_CARRY_KEYS='Waiver' carried_refs 'Waiver: perf budget
+Parity: not carried here')"
+eq "a batch body starts with the queue's marker" "<!-- merge-queue:batch -->" "$(batch_pr_body "$(printf '41\tA\n')" | head -n 1)"
+eq "a batch is known by its marker" "yes" "$(is_batch_body "$(batch_pr_body "$(printf '41\tA\n')")")"
+eq "and by the sentence older batches had" "yes" "$(is_batch_body 'One integration run for the pull requests below, merged in this order')"
+eq "a branch named batch-something is not a batch" "" "$(is_batch_body 'Carry escape lines into batch bodies. Closes #483')"
+eq "the queue finds batches by body, not branch" "0 2" "$(grep -c 'startswith("batch-")' "$root/templates/scripts/ci/merge-queue.sh") $(grep -c 'contains("<!-- merge-queue:batch -->")' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "each run's batch branch is its own" "batch-2026-10-15-041200" "$(batch_branch_name 2026-10-15 1 041200)"
+eq "and the second that minute" "batch-2026-10-15-041200-2" "$(batch_branch_name 2026-10-15 2 041200)"
+eq "a lagging pull ref falls back to the branch" "1" "$(grep -c 'fetch -q origin "+refs/heads/$fph_branch:refs/queue/pr-$1"' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "and is said as lagging, never 'try again'" "0" "$(grep -c 'try again' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the gate and the batch use the same fetch" "3" "$(grep -c 'fetch_pr_head "' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "--serial waits once for the run its refresh started" "1" "$(grep -c 'serial_refreshed=1' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "an unknown mergeable state is read again" "1" "$(grep -c 'while \[ "\$o_mw" = UNKNOWN \]' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "CI may read pull requests" "1" "$(grep -c 'pull-requests: read' "$root/templates/.github/workflows/ci.yml")"
+eq "the spec check reads the live body" "1" "$(grep -c 'SPEC_TEXT=$(gh api' "$root/templates/.github/workflows/ci.yml")"
 eq "a body with neither carries nothing" "" "$(carried_refs 'Just a copy fix.')"
 eq "the batch body carries its members' lines" "Carried from the members:
 
@@ -1177,7 +1198,7 @@ line-endings
 status-page" "$(split_checks "$(printf 'jobs:\n  classify:\n    x: 1\n  line-endings:\n    x: 1\n  status-page:\n    x: 1\n  app:\n    x: 1\n')")"
 eq "a ci.yml with one checks job is not" "" "$(split_checks "$(printf 'jobs:\n  checks:\n    x: 1\n  app:\n    x: 1\n')")"
 eq "the template itself is not" "" "$(split_checks "$(cat "$root/templates/.github/workflows/ci.yml")")"
-eq "sync points a split ci.yml at the migration page" "1" "$(grep -c 'plugin/CI-MIGRATION.md' "$root/scripts/sync/sync-templates.sh")"
+eq "sync points a split ci.yml, and one without pull-requests: read, at the migration page" "2" "$(grep -c 'plugin/CI-MIGRATION.md' "$root/scripts/sync/sync-templates.sh")"
 eq "the migration page ships with the plugin" "yes" "$([ -f "$root/CI-MIGRATION.md" ] && echo yes || echo no)"
 
 printf '\n# the CI template is three jobs on a pull request\n'
@@ -1207,6 +1228,28 @@ eq "no loop in worktrees.sh ends on a bare test" "0" "$(grep -c '^ *\[ [^]]*\] &
 eq "close says a pull request was already closed" "1" "$(grep -c 'was already closed; added the reason' "$root/templates/scripts/worktrees.sh")"
 eq "close reads and closes over REST" "0" "$(grep -c 'gh pr view\|gh pr close' "$root/templates/scripts/worktrees.sh")"
 
+
+printf '\n# what an agent did after a refusal\n'
+. "$root/hooks/scripts/resolution-lib.sh"
+eq "moved the file aside: followed" "followed" "$(resolution_of block-delete Bash 'git mv a.txt aside/a.txt')"
+eq "deleted it through Python: a possible workaround" "workaround" "$(resolution_of block-delete Bash "python -c 'import os; os.remove(\"a\")'")"
+eq "find -delete is a workaround too" "workaround" "$(resolution_of block-delete Bash 'find . -name x -delete')"
+eq "an unrelated command says nothing" "" "$(resolution_of block-delete Bash 'ls -la')"
+eq "asking the person settles any refusal" "asked" "$(resolution_of block-force-push AskUserQuestion '')"
+eq "a plain push after a refused force push: followed" "followed" "$(resolution_of block-force-push Bash 'git push origin feature')"
+eq "a plus-refspec push: a workaround" "workaround" "$(resolution_of block-force-push Bash 'git push origin +feature')"
+eq "merging over the API after a refused gh pr merge: a workaround" "workaround" "$(resolution_of require-batch-merge Bash 'gh api -X PUT repos/o/r/pulls/12/merge')"
+eq "through the queue: followed" "followed" "$(resolution_of require-batch-merge Bash 'sh scripts/ci/merge-queue.sh --drain')"
+eq "writing STATUS.md by redirect: a workaround" "workaround" "$(resolution_of block-generated-page Bash 'echo x >> STATUS.md')"
+eq "rebuilding it: followed" "followed" "$(resolution_of block-generated-page Bash 'sh status/build.sh')"
+eq "one test file after a refused sweep: followed" "followed" "$(resolution_of block-full-test-sweep Bash 'npx vitest run src/a.test.ts')"
+eq "an issue made over the API without a State: a workaround" "workaround" "$(resolution_of require-state-label Bash 'gh api -X POST repos/o/r/issues -f title=x')"
+eq "an agent dispatched again: followed" "followed" "$(resolution_of require-agent-model Agent '')"
+eq "the feed, newest first, open while unsettled" "t3	block-delete	open
+t2	block-delete	workaround
+t1	block-force-push	followed" "$(resolution_feed "$(printf 't1\tblock-force-push\ts\ta\nt2\tblock-delete\ts\tb\nt3\tblock-delete\ts\tc')" "$(printf 'x\ta\tblock-force-push\ts\tfollowed\nx\tb\tblock-delete\ts\tworkaround')")"
+eq "a hook line from before ids is keyed by its time" "t0	block-delete	followed" "$(resolution_feed "$(printf 't0\tblock-delete')" "$(printf 'x\tt0\tblock-delete\ts\tfollowed')")"
+eq "every refusing hook logs, and the watcher is registered three times" "9 3" "$(grep -l 'refusal-log.sh' "$root"/hooks/scripts/block-*.sh "$root"/hooks/scripts/require-*.sh | wc -l | tr -d ' ') $(grep -c watch-resolution "$root/hooks/hooks.json")"
 printf '\n# runner watch\n'
 runs=$(printf '11\tCI\tfeature\tqueued\t1000\n12\tCI\tmain\tqueued\t1500\n13\tCI\tother\tin_progress\t100\n14\tCI\tx\tqueued\t1900\n')
 eq "runs queued past ten minutes, oldest first" "11	CI	feature	16

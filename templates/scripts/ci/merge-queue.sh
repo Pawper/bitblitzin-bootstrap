@@ -415,6 +415,31 @@ folder_blocks() {
 # is SETUP.md or the "manual" line in setup-paths.txt; migrations are the
 # "migration" kind in .claude/numbering.txt.
 . "$here/numbering-lib.sh"
+# fetch_pr_head PR [DIR]: put the pull request's head commit at
+# refs/queue/pr-PR (in DIR, default here) and print it. GitHub's pull ref
+# (refs/pull/N/head) can lag the branch by half an hour, so when it is not
+# the head the pull request reports, the branch itself is fetched. Prints
+# nothing and returns 1 when neither has the head yet, with the reason in
+# $fph_why.
+fetch_pr_head() {
+  fph_dir=${2:-.}
+  fph_want=$(pr_field "$1" 2)
+  git -C "$fph_dir" fetch -q origin "+refs/pull/$1/head:refs/queue/pr-$1" 2>/dev/null || true
+  fph_got=$(git -C "$fph_dir" rev-parse -q --verify "refs/queue/pr-$1" 2>/dev/null || true)
+  if [ -n "$fph_want" ] && [ "$fph_got" != "$fph_want" ]; then
+    fph_branch=$(pr_field "$1" 1)
+    if [ -n "$fph_branch" ] && git -C "$fph_dir" fetch -q origin "+refs/heads/$fph_branch:refs/queue/pr-$1" 2>/dev/null; then
+      fph_got=$(git -C "$fph_dir" rev-parse -q --verify "refs/queue/pr-$1" 2>/dev/null || true)
+    fi
+  fi
+  if [ -z "$fph_got" ]; then fph_why="its head could not be fetched"; return 1; fi
+  if [ -n "$fph_want" ] && [ "$fph_got" != "$fph_want" ]; then
+    fph_why="GitHub's copy of it is behind its branch (has $(printf '%.7s' "$fph_got"), the branch is at $(printf '%.7s' "$fph_want")); GitHub usually catches up within minutes, so it waits for the next round, not a failure"
+    return 1
+  fi
+  printf '%s\n' "$fph_got"
+}
+
 migration_blocks() {
   [ -f .claude/numbering.txt ] || return 0
   mb_glob=$(numbering_glob "$(cat .claude/numbering.txt)" migration)
@@ -427,10 +452,10 @@ migration_blocks() {
   # main and the pull request together and then reading FETCH_HEAD names
   # main, the first ref fetched: the gate compared main with itself, saw
   # no migration added, and let three unrun migrations through.
-  git fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" "+refs/pull/$1/head:refs/queue/pr-$1" 2>/dev/null || { echo "its migrations could not be checked (fetching pull/$1/head failed); try again"; return 0; }
-  mb_head=$(git rev-parse "refs/queue/pr-$1")
-  mb_want=$(pr_field "$1" 2)
-  if [ -n "$mb_want" ] && [ "$mb_head" != "$mb_want" ]; then echo "its migrations could not be checked (fetched $mb_head, but the pull request's head is $mb_want); try again"; return 0; fi
+  git fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null || { echo "its migrations could not be checked (fetching $base failed); it waits for the next round"; return 0; }
+  # The head as the pull request reports it, from its pull ref or, when
+  # GitHub's pull ref lags, its branch.
+  mb_head=$(fetch_pr_head "$1") || { echo "its migrations could not be checked yet: $fph_why"; return 0; }
   mb_added=$(git diff --name-only --diff-filter=A "origin/$base...$mb_head" 2>/dev/null)
   # Files added under a migrations folder that the glob does not match
   # mean the glob is wrong, and the gate would see nothing; say so.
@@ -510,6 +535,15 @@ serial_one() {
     fi
     sync_worktree "$hb"
     batch_line "$pr" "updated" "main moved in its classes (PR: ${pr_classes:-none}; main: ${main_classes:-none}) and main is ${ms:-not known to be green}, so CI runs again"
+    # Run by hand, --serial waits for that run and merges, rather than
+    # leaving its caller to loop; once only, so a main that keeps moving
+    # is said, not chased. A drain moves on and comes back next round.
+    if [ -z "$QUEUE_IN_DRAIN" ] && [ -z "${serial_refreshed:-}" ]; then
+      serial_refreshed=1
+      sleep 20
+      rm -f "$flaky_dir/pr-$pr.tsv" 2>/dev/null
+      if wait_for_run "$pr" "$hb"; then serial_one "$pr"; fi
+    fi
     return 0
   fi
   head_branch=$hb
@@ -606,7 +640,7 @@ if [ "$mode" = drain ]; then
     # Open batches: their members are theirs, not the drain's. A batch one of
     # whose members has landed on its own no longer matches main; close it.
     members=""; settled=""
-    for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null); do
+    for bp in $(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select((.body // "") | (contains("<!-- merge-queue:batch -->") or startswith("One integration run for the pull requests below"))) | .number' 2>/dev/null); do
       bm=$(batch_members "$(gh api "repos/{owner}/{repo}/pulls/$bp" --jq '.body // ""' 2>/dev/null)")
       landed=""
       for m in $bm; do [ "$(gh api "repos/{owner}/{repo}/pulls/$m" --jq '.merged' 2>/dev/null)" = true ] && landed="$landed #$m"; done
@@ -634,7 +668,14 @@ if [ "$mode" = drain ]; then
     listed=$(drop_members "$listed" "$members $settled")
     open=$(printf '%s\n' "$listed" | while IFS="$tab" read -r o_num o_draft o_sha o_base; do
       [ -n "$o_num" ] || continue
-      printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$(mergeable_word "$(pr_field "$o_num" 5)")" "$(pr_rollup "$o_sha")" "$o_base"
+      # After main moves GitHub says "unknown" for a few seconds while it
+      # recomputes; read again before treating the pull request as not ready.
+      o_mw=$(mergeable_word "$(pr_field "$o_num" 5)"); o_try=0
+      while [ "$o_mw" = UNKNOWN ] && [ "$o_try" -lt 3 ]; do
+        sleep 4; rm -f "$flaky_dir/pr-$o_num.tsv" 2>/dev/null
+        o_mw=$(mergeable_word "$(pr_field "$o_num" 5)"); o_try=$((o_try + 1))
+      done
+      printf '%s\t%s\t%s\t%s\t%s\n' "$o_num" "$o_draft" "$o_mw" "$(pr_rollup "$o_sha")" "$o_base"
     done)
     rate_ok
     # A red pull request gets one retry of its failed jobs; a second red,
@@ -800,9 +841,10 @@ fi
 git fetch -q origin "$base"
 day=$(date +%Y-%m-%d)  # the owner's local day, like every date in the repository
 n=1
-branch=$(batch_branch_name "$day" "$n")
+stamp=$(date +%H%M%S)
+branch=$(batch_branch_name "$day" "$n" "$stamp")
 while git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; do
-  n=$((n + 1)); branch=$(batch_branch_name "$day" "$n")
+  n=$((n + 1)); branch=$(batch_branch_name "$day" "$n" "$stamp")
 done
 # The main checkout is the first worktree git lists, whatever folder the
 # queue was started from; its node_modules are the ones to link, and the
@@ -862,7 +904,7 @@ good=$(git -C "$wt" rev-parse HEAD)
 # with git merge-tree, which merges in memory and touches no files. A
 # pull request left out conflicts with one that lands now, so it will
 # conflict with main: its owner is told now, with the files.
-for pr in $prs; do git -C "$wt" fetch -q origin "+refs/pull/$pr/head:refs/queue/pr-$pr" 2>/dev/null || true; done
+for pr in $prs; do fetch_pr_head "$pr" "$wt" >/dev/null || true; done
 # The owner console reads this line to show which pull requests are being
 # test-merged; it is cleared when the pairing ends.
 printf 'checking %s\n' "$(printf '%s ' $prs | sed 's/ $//')" > "$flaky_dir/now" 2>/dev/null || true
@@ -896,9 +938,9 @@ for pr in $prs; do
   esac
   why=$(folder_blocks "$pr"); [ -n "$why" ] || why=$(migration_blocks "$pr")
   if [ -n "$why" ]; then batch_line "$pr" "refused" "$why"; continue; fi
-  git -C "$wt" fetch -q origin "pull/$pr/head" || { batch_line "$pr" "dropped" "could not fetch it"; dropped="$dropped $pr"; continue; }
-  git -C "$wt" fetch -q origin "+refs/pull/$pr/head:refs/queue/pr-$pr" 2>/dev/null || true
-  head=$(git -C "$wt" rev-parse "refs/queue/pr-$pr")
+  # Merge the head the pull request reports: from its pull ref, or from
+  # its branch when GitHub's pull ref lags behind.
+  head=$(fetch_pr_head "$pr" "$wt") || { batch_line "$pr" "left for later" "$fph_why"; continue; }
   title=$(pr_field "$pr" 3); [ -n "$title" ] || title="PR $pr"
   if ! git -C "$wt" merge -q --no-ff --no-edit -m "Merge PR #$pr into $branch: $title" "$head" >/dev/null 2>&1; then
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
@@ -990,7 +1032,7 @@ close_pr() { # NUMBER REASON
   gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$2" >/dev/null 2>&1 || true
   gh api -X PATCH "repos/{owner}/{repo}/pulls/$1" -f state=closed >/dev/null 2>&1 && echo "closed batch PR #$1: $2"
 }
-gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select(.head.ref | startswith("batch-")) | .number' 2>/dev/null \
+gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | select((.body // "") | (contains("<!-- merge-queue:batch -->") or startswith("One integration run for the pull requests below"))) | .number' 2>/dev/null \
   | while read -r old; do [ -n "$old" ] && close_pr "$old" "Superseded by a new batch from the queue; its members are carried there if still green."; done
 
 git -C "$wt" push -q -u origin "$branch"

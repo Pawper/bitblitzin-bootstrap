@@ -1,5 +1,5 @@
 {
-  "description": "Enforces the Bitblitzin Bootstrap rules: no deletes, no forced pushes, no full test sweeps, no direct edits to generated pages, no issue filed without a State label, no agent dispatched without a fitting model, no serial merge of more than two pull requests without a named mode, no pull request closed without a comment, no detached worktree; refuses to finish a task in a worktree that is not clean; and prints the project's live state and the drive's proposal at session start.",
+  "description": "Enforces the Bitblitzin Bootstrap rules: no deletes, no forced pushes, no full test sweeps, no direct edits to generated pages, no issue filed without a State label, no agent dispatched without a fitting model, no serial merge of more than two pull requests without a named mode, no pull request closed without a comment, no detached worktree; refuses to finish a task in a worktree that is not clean; and prints the project's live state and the drive's proposal at session start; and notes what an agent did after each refusal, for the console's resolution feed.",
   "hooks": {
     "SessionStart": [
       {
@@ -22,6 +22,11 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/require-clean-worktree.sh\"",
             "timeout": 20,
             "statusMessage": "Checking the worktree is clean"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/watch-resolution.sh\"",
+            "timeout": 5
           }
         ]
       }
@@ -34,6 +39,11 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/require-clean-worktree.sh\"",
             "timeout": 20,
             "statusMessage": "Checking the worktree is clean"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/watch-resolution.sh\"",
+            "timeout": 5
           }
         ]
       }
@@ -99,6 +109,18 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/block-generated-page.sh\"",
             "timeout": 10,
             "statusMessage": "Checking the file is not a generated page"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/watch-resolution.sh\"",
+            "timeout": 5
           }
         ]
       }

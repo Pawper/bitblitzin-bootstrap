@@ -9,9 +9,9 @@
 A Claude Code plugin for projects where many coding agents work at once.</p>
 
 <p align="center">
-  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-110F17?labelColor=110F17&color=FFB347"></a>
+  <a href="https://github.com/Pawper/bitblitzin-bootstrap/releases"><img alt="Version 0.11.0" src="https://img.shields.io/badge/version-0.11.0-110F17?labelColor=110F17&color=FFB347"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-110F17?labelColor=110F17&color=FF6EC7"></a>
-  <a href="#tests"><img alt="722 tests" src="https://img.shields.io/badge/tests-722%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
+  <a href="#tests"><img alt="756 tests" src="https://img.shields.io/badge/tests-756%20passed-110F17?labelColor=110F17&color=3FD6FF"></a>
   <a href="https://bitblitzin.com/bootstrap"><img alt="bitblitzin.com/bootstrap" src="https://img.shields.io/badge/site-bitblitzin.com%2Fbootstrap-110F17?labelColor=110F17&color=A8E36B"></a>
 </p>
 
@@ -297,7 +297,7 @@ app.get('/owner', requireOwner, owner.handler);
 1. **Launch to-do.** What stands between here and launch. Each item clears itself: from a setting that is now present, from a system that is now ready, or from a flag the owner sets when a step with no setting is done (runners, signing key, backup, bot checks, branch protection).
 2. **Services.** One card per outside system: hosting, database, storage, email, sign-in, payments, ads, DNS, relay and media, bot checks, backups, source control and CI. Each says what it does in one sentence, its state (ready, partly, to do) derived from which settings are present, a plain note saying what is still needed, and links into its dashboard. A card is a system, never a task or a feature; two things on one vendor fold into one card with a line each. Beside the cards, a map of the same systems with the browser and the app's own parts drawn dashed and labeled lines for what flows between them.
 3. **FAQ.** "How do I" for the routine owner tasks and "What happens when" for the limits and reporting paths. Every answer states the real behavior and links to the page, script or document that does it. Where something is not built, the answer says "not built yet" instead of inventing it.
-4. **Delivery.** How work moves through the project over the last two weeks, read from what GitHub already records and the files the plugin keeps on this machine, with nothing sent anywhere. Time from push to a CI result and its trend, the share of job time spent waiting for a runner, time from opened to merged, how often main went red and for how long, batches against serial merges and the serial reasons given, and which hooks refused commands most. Above the numbers, a plain line for anything that got worse ("Jobs spent 69% of their time waiting for a runner"). Below them, the merge queue as a live picture: open pull requests, the batch under test with its CI progress, and what just landed on main, each a chip that slides between columns as it moves, with a tooltip for its title, author, branch and checks. The page polls the queue every 30 seconds, over REST and cached, so a page left open costs little of the API budget. `--no-delivery` leaves the section out. `node "$CLAUDE_PLUGIN_ROOT/console/cli.js" queue-demo --out queue.html` writes the same picture as one self-playing page with a scripted queue, for a site with no project behind it.
+4. **Delivery.** How work moves through the project over the last two weeks, read from what GitHub already records and the files the plugin keeps on this machine, with nothing sent anywhere. Time from push to a CI result and its trend, the share of job time spent waiting for a runner, time from opened to merged, how often main went red and for how long, batches against serial merges and the serial reasons given, and what agents did after each refusal: a feed of every refusal with its outcome (followed the message, asked the person, retried, moved on, stopped, or a possible workaround that reached the same effect another way), and each hook's follow rate. A possible workaround is a pattern match for a person to check, never blocked; a refusal still logs only the hook and the session, never the command. Above the numbers, a plain line for anything that got worse ("Jobs spent 69% of their time waiting for a runner"). Below them, the merge queue as a live picture: open pull requests, the batch under test with its CI progress, and what just landed on main, each a chip that slides between columns as it moves, with a tooltip for its title, author, branch and checks. The page polls the queue every 30 seconds, over REST and cached, so a page left open costs little of the API budget. `--no-delivery` leaves the section out. `node "$CLAUDE_PLUGIN_ROOT/console/cli.js" queue-demo --out queue.html` writes the same picture as one self-playing page with a scripted queue, for a site with no project behind it.
 5. **Live numbers**, where the project has them, read through the project's admin API when mounted online. The local mount leaves them out and says so.
 
 **One file drives it:** `console/services.json`. It lists the systems, the settings each depends on with a plain label for each, the links, the to-do items and their flags, and the FAQ entries. An agent adding a service adds an entry and the page follows. Nothing a person sees names a variable: the card says "the database address is still needed," not the name of the setting.
@@ -411,7 +411,7 @@ ok    no overlap merges
 ok    overlap reruns
 ok    ci on main reruns
 
-722 passed, 0 failed
+756 passed, 0 failed
 ```
 
 ## License, privacy and terms

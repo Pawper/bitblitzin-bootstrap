@@ -67,6 +67,20 @@ dd { margin: 2px 0 0; color: var(--ink); }
 .bar .track { background: var(--line); border-radius: 3px; height: 8px; overflow: hidden; }
 .bar .track i { display: block; height: 100%; background: var(--link); }
 .bar .v { text-align: right; color: var(--soft); }
+.hrows { display: grid; gap: 6px; margin-top: 6px; }
+.hrow { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 92px; gap: 8px; align-items: center; font-size: 13px; }
+.hrow .stack { display: flex; height: 10px; border-radius: 3px; overflow: hidden; background: var(--line); }
+.hrow .stack i { display: block; height: 100%; }
+.hrow .v { text-align: right; color: var(--soft); font-size: 12px; }
+.hkey { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 10px 0 6px; font-size: 12px; color: var(--soft); }
+.hkey i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.o-followed { background: var(--ready); } .o-asked { background: var(--link); } .o-retried { background: var(--partly); }
+.o-moved-on, .o-stopped { background: var(--todo); } .o-workaround { background: #e5484d; } .o-open { background: var(--line); }
+.feed { list-style: none; padding: 0; margin: 8px 0 0; max-height: 260px; overflow: auto; font-size: 13px; }
+.feed li { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px; align-items: center; padding: 5px 0; border-top: 1px solid var(--line); }
+.feed .when { color: var(--soft); font-size: 12px; } .feed .hk { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; color: #fff; }
+.feed .badge.o-open { color: var(--soft); } .feed li.alarm .hk { color: #e5484d; font-weight: 600; }
 .numbers { display: flex; gap: 16px; flex-wrap: wrap; }
 .number { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 18px; min-width: 140px; }
 .number b { font-size: 22px; display: block; }
@@ -172,6 +186,29 @@ function renderNumbers(view) {
   return `<h2 id="numbers">Live numbers</h2>\n${body}`;
 }
 
+// renderHookFeed(RESOLUTION): what agents did after each refusal. Per
+// hook, a bar split by outcome and its follow rate; then the newest
+// refusals with their outcome, a possible workaround marked red.
+const OUTCOME_WORD = { followed: 'followed', asked: 'asked the person', retried: 'retried', 'moved on': 'moved on', stopped: 'stopped', workaround: 'possible workaround', open: 'open' };
+function renderHookFeed(r) {
+  const empty = '<p class="note">None on record. Each refusal adds a line to .scratch/hooks.log in this project, and what the agent did next to .scratch/hooks-resolved.log.</p>';
+  if (!r || !r.feed.length) return `<div class="card"><h3>What agents did after a refusal</h3>${empty}</div>`;
+  const order = ['followed', 'asked', 'retried', 'moved on', 'stopped', 'workaround', 'open'];
+  const rows = Object.entries(r.byHook).sort((a, b) => b[1].total - a[1].total).map(([hook, b]) => {
+    const segs = order.filter((o) => b[o]).map((o) => `<i class="o-${o.replace(' ', '-')}" style="width:${(100 * b[o] / b.total).toFixed(1)}%" title="${esc(OUTCOME_WORD[o])}: ${b[o]}"></i>`).join('');
+    return `<div class="hrow"><span class="k">${esc(hook)}</span><span class="stack">${segs}</span><span class="v">${b.followRate == null ? '' : Math.round(100 * b.followRate) + '% followed'}</span></div>`;
+  }).join('');
+  const key = order.map((o) => `<span><i class="o-${o.replace(' ', '-')}"></i>${esc(OUTCOME_WORD[o])}</span>`).join('');
+  const feed = r.feed.map((f) => {
+    const when = new Date(f.at); const t = isNaN(when) ? f.at : when.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return `<li class="${f.outcome === 'workaround' ? 'alarm' : ''}"><span class="when">${esc(t)}</span><span class="hk">${esc(f.hook)}</span><span class="badge o-${f.outcome.replace(' ', '-')}">${esc(OUTCOME_WORD[f.outcome] || f.outcome)}</span></li>`;
+  }).join('');
+  return `<div class="card hookfeed"><h3>What agents did after a refusal</h3>
+<div class="hrows">${rows}</div><div class="hkey">${key}</div>
+<ul class="feed">${feed}</ul>
+<p class="note">Judged from the agent's next actions, not its intent: a possible workaround is a pattern match for a person to check, never blocked.</p></div>`;
+}
+
 // renderDelivery(SUMMARY, QUEUE_STATE): how work moves through the
 // project, from delivery.js. Plain lines first when something got worse,
 // then the numbers, then the queue as a picture.
@@ -202,7 +239,7 @@ ${say}
 <div class="numbers">${tiles}</div>
 <div class="delivery-grid">
 <div class="card"><h3>Merges</h3><p class="note">${d.queue.batches} batch${d.queue.batches === 1 ? '' : 'es'} and ${d.queue.serial} serial merge${d.queue.serial === 1 ? '' : 's'}; serial reasons:</p>${bars(d.queue.reasons, 'No serial merges.')}${d.queue.flaky ? `<p class="note">${d.queue.flaky} test result(s) on record for unreliable tests.</p>` : ''}</div>
-<div class="card"><h3>Commands the hooks refused</h3>${bars(d.hooks, 'None on record. The hooks write one line per refusal to .scratch/hooks.log in this project.')}</div>
+${renderHookFeed(d.resolution)}
 <div class="queue-wrap">${queueState ? renderQueue(queueState, { poll: 'queue.json', every: 30000 }) : ''}</div>
 </div>
 ${d.read.length ? `<p class="note">${d.read.map(esc).join(' ')}</p>` : ''}`;
@@ -254,4 +291,4 @@ ${view.delivery ? `<script>${require('./queue-view').QUEUE_JS}</script>` : ''}
 `;
 }
 
-module.exports = { renderPage, renderDelivery, renderMap, renderCard, renderTodo, renderFaqGroup, renderNumbers, esc };
+module.exports = { renderPage, renderDelivery, renderHookFeed, renderMap, renderCard, renderTodo, renderFaqGroup, renderNumbers, esc };

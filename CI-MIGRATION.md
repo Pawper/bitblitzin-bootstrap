@@ -34,3 +34,22 @@ After the move a pull request runs three jobs (`checks`, `app`, `CI passed`) and
 - On the first pull request after the move: three jobs, `CI passed` green, and a step that fails names the rule it broke.
 - Push twice to one pull request quickly: the first run shows as cancelled.
 - Branch protection still requires only `CI passed`. If a project had required a per-rule job by name, remove that requirement, because the job no longer exists.
+
+## 0.10.1: read the live pull request body
+
+Two small changes to the `checks` job, for a project already on the layout above:
+
+1. Add `pull-requests: read` under `permissions:`. A check that reads a pull request's body (the spec check, or a project's own "Parity:" or "Twin:" guard) can then fetch the live body. A re-run (`gh run rerun`) keeps the event payload of the run it re-runs, so without this an edited body only counts after an empty commit.
+2. In the spec-check step, set `SPEC_TEXT` from the live body, falling back to the event's copy:
+   ```yaml
+   env:
+     GH_TOKEN: ${{ github.token }}
+     PAYLOAD_TEXT: |
+       ${{ github.event.pull_request.title }}
+       ${{ github.event.pull_request.body }}
+   run: |
+     SPEC_TEXT=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" --jq '.title + "\n" + (.body // "")' 2>/dev/null) || SPEC_TEXT=$PAYLOAD_TEXT
+     export SPEC_TEXT
+     sh scripts/ci/spec-check.sh "$BASE" "${{ github.sha }}"
+   ```
+   A project's own body-reading checks can do the same.
