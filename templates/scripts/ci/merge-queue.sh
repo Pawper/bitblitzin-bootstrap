@@ -857,26 +857,60 @@ if [ -e "$wt/.git" ]; then
 else
   git worktree add -q -B "$branch" "$wt" "origin/$base"
 fi
-# link_modules: a junction on Windows, a symlink elsewhere, for each
-# package's node_modules the worktree lacks and the main checkout has.
-link_modules() {
-  git ls-files -- package.json '*/package.json' 2>/dev/null | sed 's#/package\.json$##; s#^package\.json$#.#' | while IFS= read -r d; do
-    [ ! -e "$wt/$d/node_modules" ] || continue
+# ensure_modules: every package in the batch checkout has the packages its
+# own lockfile names. Where the lockfile is the main checkout's, its
+# node_modules are linked (a junction on Windows, a symlink elsewhere), so
+# nothing is installed twice. Where it differs (main moved a dependency or
+# a workspace package, or a member changed one), the link is removed
+# (only the link: never the files behind it) and the project's install
+# runs there, QUEUE_INSTALL_COMMAND or "npm ci". A stale link once made a
+# green main type-check red "before any merge".
+mod_hash() { [ -f "$1" ] && git hash-object "$1" 2>/dev/null || echo none; }
+is_link() { [ -e "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")" ]; }
+unlink_dir() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) cmd //c rmdir "$(cygpath -w "$1")" >/dev/null 2>&1 ;;
+    *) unlink "$1" 2>/dev/null ;;
+  esac
+}
+# link_dir TARGET LINK. Git Bash rewrites "/J" as a path unless told not
+# to, and mklink then failed with "Invalid switch", quietly.
+link_dir() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd /c mklink /J "$(cygpath -w "$2")" "$(cygpath -w "$1")" >/dev/null 2>&1 ;;
+    *) ln -s "$1" "$2" 2>/dev/null ;;
+  esac
+}
+install_here() { # DIR
+  echo "Installing packages in $1 (its lockfile is not the one the linked packages were installed from)."
+  if (cd "$1" && sh -c "${QUEUE_INSTALL_COMMAND:-npm ci --no-audit --no-fund}") >/dev/null 2>"$flaky_dir/install.err"; then
+    mod_hash "$1/package-lock.json" > "$1/node_modules/.queue-lock-hash" 2>/dev/null || true
+  else
+    echo "  the install failed: $(tail -n 1 "$flaky_dir/install.err" 2>/dev/null)"
+  fi
+}
+ensure_modules() {
+  git -C "$wt" ls-files -- package.json '*/package.json' 2>/dev/null | sed 's#/package\.json$##; s#^package\.json$#.#' | while IFS= read -r d; do
+    em_nm="$wt/$d/node_modules"
+    em_lock=$(mod_hash "$wt/$d/package-lock.json")
+    em_main=$(mod_hash "$main_dir/$d/package-lock.json")
+    if is_link "$em_nm"; then
+      [ "$em_lock" = "$em_main" ] && continue
+      unlink_dir "$em_nm" || { echo "  could not remove the link at $em_nm; the type-check may read stale packages"; continue; }
+    elif [ -d "$em_nm" ]; then
+      [ "$(cat "$em_nm/.queue-lock-hash" 2>/dev/null)" = "$em_lock" ] && continue
+      [ -f "$wt/$d/package-lock.json" ] || continue
+      install_here "$wt/$d"; continue
+    fi
     mkdir -p "$wt/$d"
-    if [ -d "$main_dir/$d/node_modules" ]; then
-      case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) cmd //c mklink /J "$(cygpath -w "$wt/$d/node_modules")" "$(cygpath -w "$main_dir/$d/node_modules")" >/dev/null 2>&1 || true ;;
-        *) ln -s "$main_dir/$d/node_modules" "$wt/$d/node_modules" 2>/dev/null || true ;;
-      esac
+    if [ "$em_lock" = "$em_main" ] && [ -d "$main_dir/$d/node_modules" ]; then
+      link_dir "$main_dir/$d/node_modules" "$em_nm" || echo "  could not link $em_nm; the type-check may not find its packages"
     elif [ -f "$wt/$d/package-lock.json" ] && command -v npm >/dev/null 2>&1; then
-      # Nothing to link: install, so a fresh worktree is not mistaken for
-      # a red base. A missing install once dropped a whole batch twice.
-      echo "Installing packages in $wt/$d (no node_modules to link from $main_dir/$d)."
-      (cd "$wt/$d" && npm ci --no-audit --no-fund >/dev/null 2>"$flaky_dir/install.err") || echo "  npm ci failed: $(tail -n 1 "$flaky_dir/install.err" 2>/dev/null)"
+      install_here "$wt/$d"
     fi
   done
 }
-link_modules
+ensure_modules
 echo "batch branch $branch in $wt from origin/$base"
 
 # The base is checked before anything is merged. A red base (packages not
@@ -951,6 +985,11 @@ for pr in $prs; do
     continue
   fi
   changed=$(git -C "$wt" diff --name-only "origin/$base...$head")
+  # a member that changes dependencies gets them installed before its check
+  case "
+$changed" in *"
+package-lock.json"*|*"/package-lock.json"*|*"
+package.json"*|*"/package.json"*) ensure_modules ;; esac
   if [ -n "$typecheck" ] && ! typecheck_ok "$changed" "$wt"; then
     git -C "$wt" reset -q --hard "$good"
     batch_line "$pr" "dropped" "the type-check went red after merging it: $(head -n 1 "$flaky_dir/typecheck.err" 2>/dev/null | tr -d '\r')"
