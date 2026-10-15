@@ -23,7 +23,7 @@ classify_paths() {
       for cp_pat in "$@"; do
         case "$cp_p" in $cp_pat) cp_cls=$cp_c; break ;; esac
       done
-      [ -n "$cp_cls" ] && break
+      if [ -n "$cp_cls" ]; then break; fi
     done <<EOF
 $cp_rules
 EOF
@@ -130,7 +130,7 @@ needs_rerun() {
   [ -n "$(printf '%s' "$nr_main" | tr -d ' \t')" ] || { echo no; return 0; }
   for nr_a in $1; do
     for nr_b in $nr_main; do
-      [ "$nr_a" = "$nr_b" ] && { echo yes; return 0; }
+      if [ "$nr_a" = "$nr_b" ]; then echo yes; return 0; fi
     done
   done
   case " $1 $nr_main " in *" other "*) echo yes; return 0 ;; esac

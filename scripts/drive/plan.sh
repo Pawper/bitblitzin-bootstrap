@@ -106,7 +106,7 @@ if [ -n "$queue_glob" ]; then
   for f in $queue_glob; do
     [ -f "$f" ] || continue
     m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
-    [ "$m" -gt "$newest_m" ] && { newest_m=$m; newest=$f; }
+    if [ "$m" -gt "$newest_m" ]; then newest_m=$m; newest=$f; fi
   done
   if [ -n "$newest" ]; then
     if [ "$(queue_is_stale "$newest_m" "$(date +%s)" "$(tail -n 1 "$newest")")" = yes ]; then queue_state=stale; else queue_state=recent; fi

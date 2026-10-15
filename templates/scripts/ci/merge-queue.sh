@@ -209,7 +209,21 @@ pr_rollup() {
 # or older than three hours, is a crash's leftover and is taken over.
 lock_file=$flaky_dir/lock
 have_lock=no
-unlock() { [ "$have_lock" = yes ] && rm -f "$lock_file" 2>/dev/null; have_lock=no; }
+unlock() { if [ "$have_lock" = yes ]; then rm -f "$lock_file" 2>/dev/null; fi; have_lock=no; }
+# queue_exit: the one exit trap. The queue never stops without a word:
+# under set -e a failing command ends it at once, and twice that was a
+# drain exiting 1 with nothing printed, overnight, so nothing merged. A
+# drain run in a session also clears its "draining" mark here.
+queue_step="starting"
+queue_exit() {
+  qe_rc=$?
+  if [ "$qe_rc" -ne 0 ]; then
+    echo "merge-queue.sh stopped (exit $qe_rc) during: $queue_step" >&2
+    printf '%s %s\n' "$(date '+%H:%M')" "stopped (exit $qe_rc) during: $queue_step" >> "$log_file" 2>/dev/null || true
+  fi
+  if [ -n "${local_drain_mark:-}" ]; then set_repo_var QUEUE_LOCAL_DRAIN_UNTIL "" >/dev/null 2>&1 || true; fi
+  unlock
+}
 take_lock() {
   [ -z "$QUEUE_LOCKED" ] || return 0
   l=$(cat "$lock_file" 2>/dev/null || true)
@@ -226,7 +240,7 @@ take_lock() {
   printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "--$mode" > "$lock_file"
   have_lock=yes
   QUEUE_LOCKED=1; export QUEUE_LOCKED
-  trap unlock EXIT
+  trap queue_exit EXIT
 }
 
 iso_epoch() { # ISO 8601 -> epoch seconds, GNU or BSD date
@@ -669,12 +683,13 @@ if [ "$mode" = drain ]; then
   # instead of racing it; the mark is cleared when this drain ends.
   if [ -z "${GITHUB_ACTIONS:-}" ]; then
     set_repo_var QUEUE_LOCAL_DRAIN_UNTIL "$(iso_utc $(( $(date +%s) + drain_minutes * 60 )))" || true
-    trap 'set_repo_var QUEUE_LOCAL_DRAIN_UNTIL "" >/dev/null 2>&1 || true; unlock' EXIT
+    local_drain_mark=yes
   fi
   d_start=$(date +%s); round=0; tried=""; retried=""; attention=""; last_look=""
   d_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   while [ "$round" -lt "$rounds" ]; do
     round=$((round + 1))
+    queue_step="drain round $round: reading the open pull requests"
     rate_guard
     # One REST list, then one metadata call and one check-runs call per
     # open pull request, each on the REST budget and cached for the round.
@@ -693,18 +708,21 @@ if [ "$mode" = drain ]; then
       say "Listing the open pull requests failed (${l_err:-no detail}); trying again in 60 seconds."
       sleep 60
     done
+    queue_step="drain round $round: reading holds"
     # Held pull requests (a queue:hold label or a "Queue: hold" line) wait,
     # however green.
     held=$(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))\t\((.body // "") | gsub("[\r\n]+"; " | "))"' 2>/dev/null \
       | while IFS="$tab" read -r h_num h_labels h_body; do
-        [ -n "$(held_reason "$(printf '%s' "$h_labels" | tr ',' '\n')" "$(printf '%s' "$h_body" | sed 's/ | /\
-/g')")" ] && printf '%s ' "$h_num"
+        h_why=$(held_reason "$(printf '%s' "$h_labels" | tr ',' '\n')" "$(printf '%s' "$h_body" | sed 's/ | /\
+/g')")
+        if [ -n "$h_why" ]; then printf '%s ' "$h_num"; fi
       done)
     if [ -n "$held" ]; then
       [ "$held" = "${last_held:-}" ] || say "round $round: held, not merged:$(printf ' #%s' $held)"
       last_held=$held
       listed=$(drop_members "$listed" "$held")
     fi
+    queue_step="drain round $round: settling open batches"
     # Open batches: their members are theirs, not the drain's. A batch one of
     # whose members has landed on its own no longer matches main; close it.
     members=""; settled=""
@@ -777,7 +795,7 @@ if [ "$mode" = drain ]; then
     if [ "$waiting" -gt 0 ]; then
       statuses=$(printf '%s\n' "$open" | awk -F'\t' -v b="$base" '$2 == "false" && $5 == b && $4 == "pending" { print $1 }' | while read -r w_num; do
         w_sha=$(printf '%s\n' "$listed" | awk -F'\t' -v n="$w_num" '$1 == n { print $3; exit }')
-        [ -n "$w_sha" ] && gh api "repos/{owner}/{repo}/commits/$w_sha/check-runs?per_page=100" --jq '.check_runs[].status' 2>/dev/null
+        if [ -n "$w_sha" ]; then gh api "repos/{owner}/{repo}/commits/$w_sha/check-runs?per_page=100" --jq '.check_runs[].status' 2>/dev/null; fi
       done)
       queued_only=$(checks_queued_only "$statuses")
       stall=$(runner_stall "$queued_only" "$(online_runners)")

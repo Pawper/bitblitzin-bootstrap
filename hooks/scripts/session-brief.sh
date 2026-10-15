@@ -132,7 +132,7 @@ if has queue && [ -n "$queue_glob" ]; then
   for f in $queue_glob; do
     [ -f "$f" ] || continue
     m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)
-    [ "$m" -gt "$newest_m" ] && { newest_m=$m; newest=$f; }
+    if [ "$m" -gt "$newest_m" ]; then newest_m=$m; newest=$f; fi
   done
   if [ -n "$newest" ]; then
     now=$(date +%s)

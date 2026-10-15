@@ -117,7 +117,7 @@ fi
 for f in .gitattributes .gitignore; do
   [ -z "$only" ] && [ -f "$f" ] || continue
   lines=$(missing_lines "$(cat "$tpl/$f")" "$(cat "$f")")
-  [ -n "$lines" ] && echo "  $f is yours; the template has lines it lacks: $(printf '%s' "$lines" | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
+  if [ -n "$lines" ]; then echo "  $f is yours; the template has lines it lacks: $(printf '%s' "$lines" | tr '\n' ';' | sed 's/;$//; s/;/; /g')"; fi
 done
 
 # Numbering: a migration glob that matches no file, while a common folder

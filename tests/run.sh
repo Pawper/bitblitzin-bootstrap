@@ -873,6 +873,15 @@ eq "the project's install command can be named" "1" "$(grep -c 'QUEUE_INSTALL_CO
 eq "a lagging pull ref falls back to the branch" "1" "$(grep -c 'fetch -q origin "+refs/heads/$fph_branch:refs/queue/pr-$1"' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "and is said as lagging, never 'try again'" "0" "$(grep -c 'try again' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the gate and the batch use the same fetch" "3" "$(grep -c 'fetch_pr_head "' "$root/templates/scripts/ci/merge-queue.sh")"
+# A loop whose last command is "[ test ] && cmd" returns 1 when the test is
+# false; inside $(...) under set -e that ends the script without a word.
+# It did, three times (worktrees.sh close, --serial, the hold scan).
+tail_tests=$(cd "$root" && for f in $(git ls-files '*.sh'); do
+  awk -v f="$f" '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i] !~ /\][ \t]*&&/ || l[i] ~ /\|\|/) continue; j = i + 1; while (j <= NR && l[j] ~ /^[ \t]*(#.*)?$/) j++; if (j <= NR && l[j] ~ /^[ \t]*done/) printf "%s:%d\n", f, i } }' "$f"
+done)
+eq "no loop in any script ends on a bare test" "" "$tail_tests"
+eq "the queue never stops without a word, on screen and in its log" "2" "$(grep -c 'stopped (exit \$qe_rc) during: \$queue_step' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the hold scan ends on an if" "1" "$(grep -c 'if \[ -n "\$h_why" \]; then printf' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "--serial by hand waits for checks already running" "1" "$(grep -c 'its checks are still running; waiting for them' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "and for a pending required check" "1" "$(grep -c 'is still running; waiting for it, then merging' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a drain never waits on one pull request" "2" "$(grep -c '\[ -z "\$QUEUE_IN_DRAIN" \] && \[ -z "\${serial_waited:-}" \]' "$root/templates/scripts/ci/merge-queue.sh")"
