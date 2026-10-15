@@ -388,10 +388,10 @@ const QUEUE_JS = `
       el.style.setProperty('--lane', color);
       el.querySelector('.rn').textContent = r.name;
       var job = r.job, slot = el.querySelector('.slot'), what = el.querySelector('.what');
-      what.textContent = r.status === 'offline' ? 'offline' : job ? jobWords(job) : r.status === 'busy' ? 'busy with a job not listed here' : 'idle';
+      what.textContent = r.status === 'offline' ? 'offline' : job ? jobWords(job) : r.status === 'busy' ? 'busy; job not matched' : 'idle';
       what.dataset.tip = r.status === 'offline' ? 'This runner is not connected to GitHub, so it takes no jobs.'
         : job ? jobTip(job)
-        : r.status === 'busy' ? 'GitHub says this runner is busy, but its job is not among the runs this page reads: another repository, or a run older than the newest fifty.'
+        : r.status === 'busy' ? 'GitHub says this runner is busy, and no unfinished job this page read names it, even after reading again.'
         : 'Free: it takes the next job in the waiting line.';
       var p = job ? pillFor(job, batchNo) : null;
       if (p && p.isBatch) batchColor = batchColor || color;

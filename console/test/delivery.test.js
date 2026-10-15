@@ -161,7 +161,8 @@ test('the queue picture explains each job', () => {
   assert.doesNotThrow(() => new Function(qv.QUEUE_JS), 'the page script parses');
   assert.ok(qv.QUEUE_JS.includes('JOB_TIPS'));
   assert.ok(qv.QUEUE_JS.includes("'drain': 'The merge queue on its timer"));
-  assert.ok(qv.QUEUE_JS.includes('busy with a job not listed here'));
+  assert.ok(qv.QUEUE_JS.includes('busy; job not matched'));
+  assert.ok(!qv.QUEUE_JS.includes('another repository, or a run older'), 'no guessed cause');
 });
 
 test('the demo shows runners at work', () => {
