@@ -422,3 +422,28 @@ conflict_notice() {
   if [ -n "$cn_files" ]; then printf ' in:\n\n%s\n\n' "$cn_files"; else printf '.\n\n'; fi
   printf 'To resolve it: in this branch'"'"'s worktree, merge main in (`git fetch origin && git merge origin/main`), fix the files, run their tests, and push. Never rebase or force-push. The queue takes it again once it is green. It is labeled state:blocked until then.\n'
 }
+
+# held_reason LABELS BODY
+# LABELS is a pull request's label names, one per line. Print why it is
+# held when it carries the label "queue:hold" or "hold", or a line
+# "Queue: hold" in its body; nothing otherwise. A held pull request is
+# green but not to be merged yet: the drain landed one under a batch in
+# progress, and batched two that were meant to land one at a time.
+held_reason() {
+  if printf '%s\n' "$1" | tr -d '\r' | grep -qixE 'queue:hold|hold'; then echo "held by its label"; return 0; fi
+  if printf '%s\n' "$2" | tr -d '\r' | grep -qiE '^[[:space:]]*queue:[[:space:]]*hold'; then echo 'held by its "Queue: hold" line'; fi
+  return 0
+}
+
+# pause_until NOW SPEC
+# NOW in epoch seconds, SPEC a length: "2h", "45m", or bare minutes "90".
+# Print the epoch the pause ends; nothing for a SPEC it cannot read.
+pause_until() {
+  case "$2" in
+    *[hH]) pu_n=${2%[hH]}; pu_m=60 ;;
+    *[mM]) pu_n=${2%[mM]}; pu_m=1 ;;
+    *) pu_n=$2; pu_m=1 ;;
+  esac
+  case "$pu_n" in ''|*[!0-9]*) return 0 ;; esac
+  echo $(( $1 + pu_n * pu_m * 60 ))
+}

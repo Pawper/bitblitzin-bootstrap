@@ -200,18 +200,38 @@ function summarize(raw, now) {
 // are the jobs of runs not yet finished, from GitHub's run jobs list.
 function runnerLanes(runners, jobs, open) {
   const byHead = {};
-  (open || []).forEach((p) => { byHead[p.head] = p.number; });
-  const running = (jobs || []).filter((j) => j.status === 'in_progress' && j.runner_name);
+  const batchHeads = new Set();
+  (open || []).forEach((p) => {
+    byHead[p.head] = p.number;
+    if (/<!-- merge-queue:batch -->/.test(p.body || '') || /^One integration run for the pull requests below/.test(p.body || '')) batchHeads.add(p.head);
+  });
+  // A job a runner has taken: anything not finished that names the runner.
+  // Matching only "in_progress" missed a pull request's checks job in the
+  // moment between being assigned and starting, and the lane said "busy".
+  const taken = (jobs || []).filter((j) => j.status !== 'completed' && j.status !== 'queued' && j.runner_name);
+  const describe = (j) => ({
+    name: j.name,
+    workflow: j.workflow_name || null,
+    pr: byHead[j.head_branch] || null,
+    branch: j.head_branch,
+    batch: batchHeads.has(j.head_branch),
+  });
   const lanes = (runners || []).map((r) => {
-    const j = running.find((x) => x.runner_name === r.name);
+    const j = taken.find((x) => x.runner_name === r.name);
     return {
       name: r.name,
       status: r.status === 'online' ? (j || r.busy ? 'busy' : 'idle') : 'offline',
-      job: j ? { name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch, batch: /^batch-/.test(j.head_branch || '') } : null,
+      job: j ? describe(j) : null,
     };
   });
+  // The summary check ("CI passed") waits for the other jobs; it is the
+  // gate, not work. It joins the waiting line only when nothing else in
+  // its run is left to do.
+  const summary = process.env.QUEUE_SUMMARY_CHECK || 'CI passed';
+  const pendingIn = (runId, self) => (jobs || []).some((x) => x !== self && x.run_id === runId && x.status !== 'completed');
   const waiting = (jobs || []).filter((j) => j.status === 'queued')
-    .map((j) => ({ name: j.name, pr: byHead[j.head_branch] || null, branch: j.head_branch, batch: /^batch-/.test(j.head_branch || '') }));
+    .filter((j) => j.name !== summary || !pendingIn(j.run_id, j))
+    .map(describe);
   return { lanes, waiting, queued: waiting.length };
 }
 
@@ -335,11 +355,11 @@ async function gather(root, opts) {
     // of calls, and only while something runs.
     const [runnersNow, active] = await Promise.all([
       gh(root, ['repos/{owner}/{repo}/actions/runners']),
-      gh(root, ['repos/{owner}/{repo}/actions/runs?per_page=20&status=in_progress']),
+      gh(root, ['repos/{owner}/{repo}/actions/runs?per_page=50&status=in_progress']),
     ]);
-    const queuedRuns = await gh(root, ['repos/{owner}/{repo}/actions/runs?per_page=20&status=queued']);
+    const queuedRuns = await gh(root, ['repos/{owner}/{repo}/actions/runs?per_page=50&status=queued']);
     raw.runners = runnersNow && runnersNow.runners ? runnersNow.runners : null;
-    const liveRuns = [...((active && active.workflow_runs) || []), ...((queuedRuns && queuedRuns.workflow_runs) || [])].slice(0, 10);
+    const liveRuns = [...((active && active.workflow_runs) || []), ...((queuedRuns && queuedRuns.workflow_runs) || [])].slice(0, 20);
     const liveJobs = await Promise.all(liveRuns.map((r) => gh(root, [`repos/{owner}/{repo}/actions/runs/${r.id}/jobs?per_page=100`])));
     raw.activeJobs = [];
     liveJobs.forEach((l) => ((l && l.jobs) || []).forEach((j) => raw.activeJobs.push(j)));

@@ -72,6 +72,8 @@ const QUEUE_CSS = `
 .mq-wjob.leaving { position: absolute; transition: opacity .4s ease; }
 .mq-wjob { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mq-soft); transition: transform .9s cubic-bezier(.3,.7,.2,1), opacity .4s ease; }
 .mq-wjob em { font-style: normal; }
+[data-tip] { cursor: help; }
+.mq-lane .what { text-decoration: underline dotted var(--mq-line); text-underline-offset: 3px; }
 .lanes-head { margin-top: 2px; }
 .mq-lane { display: grid; grid-template-columns: 10px minmax(70px, 1fr) minmax(0, 2fr); align-items: center; gap: 10px; background: var(--mq-chip); border: 1px solid #2c3036;
   border-radius: 10px; padding: 7px 12px; font-size: 12px; transition: border-color .4s ease, box-shadow .4s ease; }
@@ -145,6 +147,19 @@ const QUEUE_JS = `
     this.lastMain = null;
     var self = this;
     window.addEventListener('resize', function () { if (self.state) self.draw(self.state); });
+    root.addEventListener('mouseover', function (e) {
+      var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (!el || !el.dataset.tip || el.classList.contains('mq-chip')) return;
+      self.tip.textContent = el.dataset.tip;
+      var r = el.getBoundingClientRect(), o = root.getBoundingClientRect();
+      self.tip.style.left = Math.min(Math.max(0, r.left - o.left), o.width - 260) + 'px';
+      self.tip.style.top = (r.bottom - o.top + 6) + 'px';
+      self.tip.classList.add('on');
+    });
+    root.addEventListener('mouseout', function (e) {
+      var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+      if (el && !el.classList.contains('mq-chip')) self.tip.classList.remove('on');
+    });
   }
   MQ.prototype.chip = function (pr, small) {
     var key = 'pr-' + pr.number, el = this.chips[key], self = this;
@@ -263,6 +278,35 @@ const QUEUE_JS = `
       text: isBatch ? 'Batch PR #' + job.pr : isMain ? 'main' : job.pr ? 'PR #' + job.pr : (job.branch || 'job'),
       cls: 'mq-pill' + (isBatch ? ' batch' : isMain ? ' main' : '') };
   }
+  // The words beside a pill: the job, and for main which workflow it is
+  // in (the full suite, a deploy, a build, the drain).
+  function jobWords(job) {
+    if (!job) return '';
+    var w = job.workflow && job.workflow !== job.name ? job.workflow + ' / ' : '';
+    return (job.pr ? '' : w) + job.name;
+  }
+  // What each job is, for the tooltip on its words. A job this list does
+  // not know is named by its workflow.
+  var JOB_TIPS = {
+    'checks': 'Every quick rule check after one checkout: line endings, the status page, numbering, spec, setup, shared code.',
+    'app': 'Installs packages once, then the type-check, the tests and, when the app changed, the production build.',
+    'CI passed': 'The one summary check branch protection requires; it reports once both jobs are done.',
+    'ci-passed': 'The one summary check branch protection requires; it reports once both jobs are done.',
+    'full': 'The whole test suite, run once on main after each merge. Main is red until it passes.',
+    'drain': 'The merge queue on its timer: it batches green pull requests and merges them.',
+    'deploy': 'Builds and ships main to production, when main moved in something the app ships.',
+    'build': 'Builds the app for release.',
+    'report-red': 'Opens the red-main issue when the full run on main fails.',
+    'report-green': 'Closes the red-main issue when main passes again.',
+    'smoke': 'Loads the deployed pages in a real browser and fails on a console error.'
+  };
+  function jobTip(job) {
+    if (!job) return '';
+    var key = Object.keys(JOB_TIPS).filter(function (k) { return k.toLowerCase() === String(job.name).toLowerCase(); })[0];
+    var where = job.pr ? (job.batch ? 'for batch PR #' + job.pr : 'for PR #' + job.pr) : job.branch === 'main' ? 'on main' : '';
+    var what = key ? JOB_TIPS[key] : 'A job in the ' + (job.workflow || "project") + ' workflow.';
+    return job.name + (job.workflow ? ' (' + job.workflow + ')' : '') + (where ? ', ' + where : '') + ': ' + what;
+  }
   MQ.prototype.fly = function (pill, src) {
     if (!src || this.root.classList.contains('still')) return;
     var a = src.getBoundingClientRect(), b = pill.getBoundingClientRect();
@@ -320,7 +364,8 @@ const QUEUE_JS = `
         el.className = 'mq-wjob';
         fresh.push([el, job, p]);
       }
-      el.firstChild.className = p.cls; el.firstChild.textContent = p.text; el.lastChild.textContent = job.name;
+      el.firstChild.className = p.cls; el.firstChild.textContent = p.text; el.lastChild.textContent = jobWords(job);
+      el.dataset.tip = jobTip(job);
       wait.appendChild(el);
     });
     Object.keys(keep).forEach(function (key) {
@@ -343,7 +388,11 @@ const QUEUE_JS = `
       el.style.setProperty('--lane', color);
       el.querySelector('.rn').textContent = r.name;
       var job = r.job, slot = el.querySelector('.slot'), what = el.querySelector('.what');
-      what.textContent = r.status === 'offline' ? 'offline' : job ? job.name : r.status === 'busy' ? 'busy' : 'idle';
+      what.textContent = r.status === 'offline' ? 'offline' : job ? jobWords(job) : r.status === 'busy' ? 'busy with a job not listed here' : 'idle';
+      what.dataset.tip = r.status === 'offline' ? 'This runner is not connected to GitHub, so it takes no jobs.'
+        : job ? jobTip(job)
+        : r.status === 'busy' ? 'GitHub says this runner is busy, but its job is not among the runs this page reads: another repository, or a run older than the newest fifty.'
+        : 'Free: it takes the next job in the waiting line.';
       var p = job ? pillFor(job, batchNo) : null;
       if (p && p.isBatch) batchColor = batchColor || color;
       else if (job && job.pr) working[job.pr] = working[job.pr] || color;
@@ -461,7 +510,7 @@ function demoFrames() {
   const M255 = P(255, 'mainconflict', { conflict: 'PR #252 landed, so its date picker change is on main now and this one conflicts with main. Its owner was told when the batch formed.' });
   const landed = (ns) => ns.map((n) => ({ number: n, title: n > 250 ? `${t[n][0]} (#${n})` : `Earlier work (#${n})`, at: null }));
   const B = (done, total, state) => ({ number: 256, state, done, total, members: [251, 252, 254].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
-  const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name } : { pr, name, batch: pr === 256 || pr === 258 });
+  const J = (pr, name) => (pr === 'main' ? { pr: null, branch: 'main', name, workflow: 'CI' } : { pr, name, workflow: 'CI', batch: pr === 256 || pr === 258 });
   const B2 = (done, total, state) => ({ number: 258, state, done, total, members: [253, 255].map((n) => P(n, state === 'green' ? 'green' : 'pending')) });
   const R = (a, b, waiting) => ({ runners: [{ name: 'build-1', status: a ? 'busy' : 'idle', job: a ? J(...a) : null }, { name: 'build-2', status: b ? 'busy' : 'idle', job: b ? J(...b) : null }], waiting: waiting.map((w) => J(...w)), queued: waiting.length });
   // Every number a person reads is a pull request; say so.

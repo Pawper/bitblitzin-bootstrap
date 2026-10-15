@@ -128,6 +128,42 @@ test('a lane per runner: its job and pull request, idle, or offline', () => {
   assert.equal(d.queueView({ open: [], runners: null }).runners, null);
 });
 
+test('a runner names its job: the PR, or main with its workflow', () => {
+  const r = d.runnerLanes(
+    [{ name: 'r1', status: 'online', busy: true }, { name: 'r2', status: 'online', busy: true }, { name: 'r3', status: 'online', busy: true }],
+    [
+      { status: 'waiting', runner_name: 'r1', name: 'checks', workflow_name: 'CI', head_branch: 'feat' },
+      { status: 'in_progress', runner_name: 'r2', name: 'deploy', workflow_name: 'Deploy', head_branch: 'main' },
+      { status: 'queued', name: 'drain', workflow_name: 'Queue drain', head_branch: 'main' },
+    ],
+    [{ number: 12, head: 'feat' }],
+  );
+  assert.deepEqual(r.lanes.map((l) => l.job && [l.job.pr, l.job.name, l.job.workflow]), [[12, 'checks', 'CI'], [null, 'deploy', 'Deploy'], null]);
+  assert.equal(r.lanes[2].status, 'busy', 'busy with no job seen is still busy');
+  assert.deepEqual(r.waiting.map((w) => [w.branch, w.workflow, w.name]), [['main', 'Queue drain', 'drain']]);
+});
+
+test('the batch PR jobs belong to the batch, and CI passed is not work', () => {
+  const r = d.runnerLanes(
+    [{ name: 'r1', status: 'online', busy: true }],
+    [
+      { run_id: 7, status: 'in_progress', runner_name: 'r1', name: 'app', workflow_name: 'CI', head_branch: 'batch-2026-10-15-041200' },
+      { run_id: 7, status: 'queued', name: 'CI passed', workflow_name: 'CI', head_branch: 'batch-2026-10-15-041200' },
+      { run_id: 8, status: 'queued', name: 'CI passed', workflow_name: 'CI', head_branch: 'feat' },
+    ],
+    [{ number: 533, head: 'batch-2026-10-15-041200', body: '<!-- merge-queue:batch -->\n- #530 A' }, { number: 12, head: 'feat' }],
+  );
+  assert.deepEqual([r.lanes[0].job.pr, r.lanes[0].job.batch], [533, true]);
+  assert.deepEqual(r.waiting.map((w) => [w.pr, w.name]), [[12, 'CI passed']], 'CI passed waits only when it is all that is left in its run');
+});
+
+test('the queue picture explains each job', () => {
+  assert.doesNotThrow(() => new Function(qv.QUEUE_JS), 'the page script parses');
+  assert.ok(qv.QUEUE_JS.includes('JOB_TIPS'));
+  assert.ok(qv.QUEUE_JS.includes("'drain': 'The merge queue on its timer"));
+  assert.ok(qv.QUEUE_JS.includes('busy with a job not listed here'));
+});
+
 test('the demo shows runners at work', () => {
   const f = qv.demoFrames();
   assert.ok(f.every((x) => x.runners && x.runners.length === 2));
