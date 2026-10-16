@@ -100,6 +100,19 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
 ```
 
+The release's first step is the gate, the same one the queue uses, so a deploy started by hand cannot stack builds in front of CI:
+
+```yaml
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        run: sh scripts/ci/deploy-gate.sh || echo "skip=yes" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.skip != 'yes'
+        run: # the build and the upload
+```
+
+The gate prints one line and skips when another open pull request is green (it lands first; one deploy carries both) or the interval in `.claude/deploy.json` has not passed since the last successful Deploy run. The queue applies the same rule after every landing, in every mode, and a drain once at its end; there is no `--deploy` flag, because a flag an agent must choose not to pass is passed again. `--status` and the session brief print the deploy state as one line. The owner forces a deploy from the Deploy workflow's own dispatch in the Actions tab, never through the queue.
+
 The release checks its own paths (did `android/` change since the last upload?) and skips when nothing it ships moved. List the release workflows in `.claude/deploy.json` under `"releases": ["play-internal.yml", "app-distribution.yml"]`: when the project has no Deploy run to follow (the guard path), `--deploy` starts each of them once instead. Sync names any workflow still on `workflow_run` of CI.
 
 ## Holding a pull request, pausing the schedule

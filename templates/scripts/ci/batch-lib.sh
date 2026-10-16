@@ -463,3 +463,31 @@ queue_status() {
   if [ -n "$1" ]; then printf 'running: %s' "$1"; else printf 'idle'; fi
   if [ -n "$2" ]; then printf '; last line: %s\n' "$2"; else printf '\n'; fi
 }
+
+# deploy_gate GREEN LAST_EPOCH NOW INTERVAL_MIN
+# Why a deploy is held, or nothing when one is due: "N green PR(s)
+# waiting" while another open pull request is green (it lands first, and
+# one deploy carries both), or "last deploy M minutes ago, interval I" while
+# the interval from .claude/deploy.json has not passed. LAST_EPOCH is empty
+# when no deploy is recorded.
+deploy_gate() {
+  if [ "${1:-0}" -gt 0 ]; then
+    if [ "$1" -eq 1 ]; then echo "1 green PR waiting"; else echo "$1 green PRs waiting"; fi
+    return 0
+  fi
+  if [ -n "$2" ] && [ $(( $3 - $2 )) -lt $(( $4 * 60 )) ]; then
+    echo "last deploy $(( ($3 - $2) / 60 )) minutes ago, interval $4"
+  fi
+}
+
+# deploy_state GREEN LAST_EPOCH NOW INTERVAL_MIN
+# One line for --status and the brief: "deploy: held, 2 green PRs waiting;
+# last deploy 35 min ago" or "deploy: due; last deploy 70 min ago (interval
+# 60)" or "deploy: due; none recorded".
+deploy_state() {
+  ds_why=$(deploy_gate "$@")
+  if [ -n "$2" ]; then ds_last="last deploy $(( ($3 - $2) / 60 )) min ago"; else ds_last="none recorded"; fi
+  if [ -n "$ds_why" ]; then
+    case "$ds_why" in last*) echo "deploy: held, $ds_why" ;; *) echo "deploy: held, $ds_why; $ds_last" ;; esac
+  else echo "deploy: due; $ds_last (interval $4)"; fi
+}

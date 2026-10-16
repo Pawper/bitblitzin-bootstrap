@@ -173,6 +173,13 @@ if [ -f .claude/deploy.json ] && [ -f scripts/ci/deploy-health.sh ]; then
   dl=$(run_bounded 6 sh scripts/ci/deploy-health.sh 2>/dev/null || true)
   [ -n "$dl" ] && add "$dl"
 fi
+# The deploy state in one line: the queue deploys after a landing only
+# when the interval has passed and no other pull request is green. --last
+# reads the last Deploy run only, one REST call, no pull request scan.
+if [ -f .claude/deploy.json ] && [ -f scripts/ci/deploy-gate.sh ] && command -v gh >/dev/null 2>&1; then
+  dg=$(run_bounded 6 sh scripts/ci/deploy-gate.sh --last 2>/dev/null || true)
+  [ -n "$dg" ] && add "Deploy: ${dg#deploy: }"
+fi
 
 # Leftover work and worktrees: local git only, one call each.
 if has leftover && [ "$have_git" = yes ]; then

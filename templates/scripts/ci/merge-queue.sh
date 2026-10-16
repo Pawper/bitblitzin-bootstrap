@@ -18,9 +18,16 @@
 #                   migration|conflict|must-land-alone|"reason". The reason
 #                   goes into the merge commit's title for the audit.
 #
-#   --drain [--deploy]  merge everything green, batching; with --deploy
-#                   (or --drain-then-deploy), start the Deploy workflow
-#                   afterwards when the project deploys on a schedule.
+#   --drain         merge everything green, batching, round after round.
+#
+# After a landing, in every mode, the queue deploys from state and never
+# from a flag: when no other open pull request is green and the interval
+# in .claude/deploy.json has passed (scripts/ci/deploy-gate.sh), it starts
+# the Deploy workflow, or the listed releases where no Deploy run would;
+# otherwise it prints "deploy held: ..." and why. A drain deploys once, at
+# its end. There is no --deploy: nine serial landings once each carried
+# one an agent copied from its last command. The owner forces a deploy
+# from the Actions tab, never through the queue.
 #
 # Usage: sh scripts/ci/merge-queue.sh [--batch | --serial] [--base BRANCH] PR...
 #        sh scripts/ci/merge-queue.sh PR [BASE]            (one PR, serial, as before)
@@ -60,7 +67,6 @@ pause_for=""
 base="main"
 prs=""
 because=""
-then_deploy=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --batch) mode=batch ;;
@@ -69,8 +75,8 @@ while [ $# -gt 0 ]; do
     --status) mode=status ;;
     --serial) mode=serial ;;
     --drain) mode=drain ;;
-    --drain-then-deploy) mode=drain; then_deploy=1 ;;
-    --deploy) then_deploy=1 ;;
+    --drain-then-deploy) mode=drain; echo "There is no --deploy any more: the queue deploys from state after a landing (scripts/ci/deploy-gate.sh)." ;;
+    --deploy) echo "There is no --deploy any more: the queue deploys from state after a landing (scripts/ci/deploy-gate.sh)." ;;
     --because) shift; because=$1 ;;
     --because=*) because=${1#--because=} ;;
     --rounds) shift; rounds=$1 ;;
@@ -95,6 +101,7 @@ case "$mode" in
     slpid=${sl%%	*}
     salive=no; [ -n "$slpid" ] && kill -0 "$slpid" 2>/dev/null && salive=yes
     queue_status "$(queue_lock_reason "$sl" "$(date +%s)" "$salive")" "$(tail -n 1 ".scratch/queue/log" 2>/dev/null | cut -c1-160)"
+    [ -f .claude/deploy.json ] && sh "$here/deploy-gate.sh" "$base" || true
     exit 0 ;;
   pause)
     pu=$(pause_until "$(date +%s)" "$pause_for")
@@ -870,7 +877,7 @@ if [ "$mode" = drain ]; then
     fi
   done
   say "drain rounds done"
-  if [ -n "$then_deploy" ]; then deploy_after_merge "$d_begin"; fi
+  deploy_if_due "$d_begin"
   # Re-read each one before calling it a failure: a pull request red
   # earlier in the drain may be green, or only cancelled, by now.
   still=""
@@ -913,16 +920,19 @@ notify_conflict() {
   say "  #$1: commented with the conflicting files and labeled it state:blocked."
 }
 
-# deploy_after_merge BEGIN_SHA: --deploy, the same in every mode. When main
+# deploy_if_due BEGIN_SHA: after a landing, the same in every mode. When main
 # moved since BEGIN_SHA and the project deploys on a schedule, start the
 # Deploy workflow now rather than at the next hour; the guard path deploys
 # from Git by itself. Release channels (store uploads, test distributions)
 # follow Deploy; where no Deploy run starts them, the ones listed under
 # "releases" in .claude/deploy.json are started here, once. A --serial
 # run once ended "queue done" with no deploy started: only the drain did this.
-deploy_after_merge() {
+deploy_if_due() {
   d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   if [ "$d_end" = "$1" ]; then say "Nothing merged, so nothing to deploy."; return 0; fi
+  [ -f .claude/deploy.json ] || { say "No .claude/deploy.json; main deploys on its own."; return 0; }
+  # The gate: no other green pull request waiting, and the interval passed.
+  if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then say "$gate"; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
   if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
     gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
     return 0
@@ -958,10 +968,11 @@ if [ "$mode" = serial ]; then
   [ -n "$because" ] || { [ -n "$QUEUE_IN_DRAIN" ] && because=drain; }
   s_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   for pr in $prs; do serial_one "$pr"; done
-  if [ -n "$then_deploy" ] && [ -z "$QUEUE_IN_DRAIN" ]; then deploy_after_merge "$s_begin"; fi
+  if [ -z "$QUEUE_IN_DRAIN" ]; then deploy_if_due "$s_begin"; fi
   exit 0
 fi
 
+b_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
 # Batch mode. The batch is built in its own worktree, never in the main
 # checkout, so a person working there is not switched onto the batch
 # branch under their feet. QUEUE_WORKTREE names the folder; the default is
@@ -1250,3 +1261,4 @@ if [ -n "$dropped" ]; then
   because="dropped from batch"
   for pr in $dropped; do serial_one "$pr"; done
 fi
+if [ -z "$QUEUE_IN_DRAIN" ]; then deploy_if_due "$b_begin"; fi
