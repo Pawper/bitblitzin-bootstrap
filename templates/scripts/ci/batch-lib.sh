@@ -453,3 +453,13 @@ pause_until() {
 release_workflows() {
   printf '%s' "$1" | tr -d '\r\n' | sed -n 's/.*"releases"[ \t]*:[ \t]*\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | sed 's/[" \t]//g; /^$/d'
 }
+
+# queue_status LOCK_REASON LAST_LINE
+# One line for --status: "running: a --drain started 12 minute(s) ago is
+# still running (pid 4242); last line: ..." or "idle; last line: ...".
+# LOCK_REASON is queue_lock_reason'\''s output, empty when no live queue
+# holds the lock.
+queue_status() {
+  if [ -n "$1" ]; then printf 'running: %s' "$1"; else printf 'idle'; fi
+  if [ -n "$2" ]; then printf '; last line: %s\n' "$2"; else printf '\n'; fi
+}
