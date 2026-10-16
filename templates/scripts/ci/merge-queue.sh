@@ -24,6 +24,12 @@
 #
 # Usage: sh scripts/ci/merge-queue.sh [--batch | --serial] [--base BRANCH] PR...
 #        sh scripts/ci/merge-queue.sh PR [BASE]            (one PR, serial, as before)
+#        sh scripts/ci/merge-queue.sh --status             (running or idle, one line)
+#
+# The last line of .scratch/queue/log for every run is "queue done (exit N);
+# lock released", written by the exit trap after the deploy and the lock,
+# so a script waiting on the log waits on that line. The lock is logged
+# when taken, too.
 #
 # Two or fewer PRs with no flag run serially. More than two with no flag is
 # refused by the require-batch-merge hook; name the mode.
@@ -60,6 +66,7 @@ while [ $# -gt 0 ]; do
     --batch) mode=batch ;;
     --pause) shift; mode=pause; pause_for=$1 ;;
     --resume) mode=resume ;;
+    --status) mode=status ;;
     --serial) mode=serial ;;
     --drain) mode=drain ;;
     --drain-then-deploy) mode=drain; then_deploy=1 ;;
@@ -83,6 +90,12 @@ set_repo_var() {
 }
 iso_utc() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
 case "$mode" in
+  status)
+    sl=$(cat ".scratch/queue/lock" 2>/dev/null || true)
+    slpid=${sl%%	*}
+    salive=no; [ -n "$slpid" ] && kill -0 "$slpid" 2>/dev/null && salive=yes
+    queue_status "$(queue_lock_reason "$sl" "$(date +%s)" "$salive")" "$(tail -n 1 ".scratch/queue/log" 2>/dev/null | cut -c1-160)"
+    exit 0 ;;
   pause)
     pu=$(pause_until "$(date +%s)" "$pause_for")
     [ -n "$pu" ] || { echo "Usage: sh scripts/ci/merge-queue.sh --pause 2h (or 45m, or minutes)"; exit 2; }
@@ -222,7 +235,14 @@ queue_exit() {
     printf '%s %s\n' "$(date '+%H:%M')" "stopped (exit $qe_rc) during: $queue_step" >> "$log_file" 2>/dev/null || true
   fi
   if [ -n "${local_drain_mark:-}" ]; then set_repo_var QUEUE_LOCAL_DRAIN_UNTIL "" >/dev/null 2>&1 || true; fi
-  unlock
+  # The run's last word, in the log as well as the terminal, after the
+  # deploy and after the lock goes: four watchers once waited on a "queue
+  # done" that only the terminal saw.
+  if [ "$have_lock" = yes ]; then
+    unlock
+    [ "$qe_rc" -ne 0 ] || echo "queue done"
+    printf '%s %s\n' "$(date '+%H:%M')" "queue done (exit $qe_rc); lock released" >> "$log_file" 2>/dev/null || true
+  fi
 }
 take_lock() {
   [ -z "$QUEUE_LOCKED" ] || return 0
@@ -239,6 +259,7 @@ take_lock() {
   fi
   printf '%s\t%s\t%s\n' "$$" "$(date +%s)" "--$mode" > "$lock_file"
   have_lock=yes
+  printf '%s %s\n' "$(date '+%H:%M')" "lock taken by --$mode (pid $$)" >> "$log_file" 2>/dev/null || true
   QUEUE_LOCKED=1; export QUEUE_LOCKED
   trap queue_exit EXIT
 }
@@ -848,7 +869,7 @@ if [ "$mode" = drain ]; then
       break
     fi
   done
-  say "queue done"
+  say "drain rounds done"
   if [ -n "$then_deploy" ]; then deploy_after_merge "$d_begin"; fi
   # Re-read each one before calling it a failure: a pull request red
   # earlier in the drain may be green, or only cancelled, by now.
@@ -938,7 +959,6 @@ if [ "$mode" = serial ]; then
   s_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   for pr in $prs; do serial_one "$pr"; done
   if [ -n "$then_deploy" ] && [ -z "$QUEUE_IN_DRAIN" ]; then deploy_after_merge "$s_begin"; fi
-  [ -n "$QUEUE_IN_DRAIN" ] || echo "queue done"
   exit 0
 fi
 
@@ -1224,7 +1244,6 @@ done
 for pr in $(printf '%s' "$carried" | cut -f1); do
   tidy_worktree "$(pr_field "$pr" 1)"
 done
-[ -n "$QUEUE_IN_DRAIN" ] || echo "queue done"
 
 if [ -n "$dropped" ]; then
   echo "serial queue for the dropped PRs:$dropped"

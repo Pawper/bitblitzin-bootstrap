@@ -29,9 +29,11 @@ token_role_keys() {
 # Print each added line that carries a raw hex colour (#abc, #aabbcc,
 # 0xFFaabbcc), a px, dp or sp number for type or spacing (0, 0.5 and 1
 # are hairlines and pass), or a font name from FONT_NAMES (one per line),
-# as "path:line: text". Lines matching ALLOW_RE (a regex, default: comment
-# lines and @media) are skipped. Every drift one project fixed was a
-# literal on one side; a screen says a token or a role by name.
+# as "path:line: [the literals found] text", so a long line is never
+# blamed on the wrong part (a "${pct}%" template beside a 40.dp). Lines
+# matching ALLOW_RE (a regex, default: comment lines and @media) are
+# skipped. Every drift one project fixed was a literal on one side; a
+# screen says a token or a role by name.
 design_literals() {
   dl_fonts=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | sed 's/[][\.*^$]/\\&/g' | paste -sd'|' -)
   # awk -v strips one backslash, so the pattern carries two
@@ -43,18 +45,25 @@ design_literals() {
     /^\+/ {
       t = substr($0, 2); cur = line; line++
       if (t ~ allow) next
-      hit = 0
-      if (t ~ /#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]([0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])?([0-9a-fA-F][0-9a-fA-F])?([^0-9a-zA-Z_-]|$)/) hit = 1
-      if (t ~ /0[xX][fF][fF][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]/) hit = 1
+      hit = ""
       s = t
-      while (match(s, /[0-9]+(\.[0-9]+)?\.?(px|dp|sp)([^a-zA-Z0-9_]|$)/)) {
-        m = substr(s, RSTART, RLENGTH); num = m; sub(/\.?(px|dp|sp).*/, "", num)
-        before = (RSTART > 1) ? substr(s, RSTART - 1, 1) : " "
-        if (before !~ /[a-zA-Z0-9_.-]/ && num + 0 != 0 && num + 0 != 0.5 && num + 0 != 1) hit = 1
+      while (match(s, /#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]([0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])?([0-9a-fA-F][0-9a-fA-F])?([^0-9a-zA-Z_-]|$)/)) {
+        m = substr(s, RSTART, RLENGTH); sub(/[^0-9a-fA-F#]$/, "", m); hit = hit ", " m
         s = substr(s, RSTART + RLENGTH)
       }
-      if (fonts != "" && t ~ ("[\"\x27](" fonts ")[\"\x27]")) hit = 1
-      if (hit) printf "%s:%d: %s\n", f, cur, t
+      s = t
+      while (match(s, /0[xX][fF][fF][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]/)) {
+        hit = hit ", " substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+      }
+      s = t
+      while (match(s, /[0-9]+(\.[0-9]+)?\.?(px|dp|sp)([^a-zA-Z0-9_]|$)/)) {
+        m = substr(s, RSTART, RLENGTH); sub(/[^a-z0-9.]$/, "", m); num = m; sub(/\.?(px|dp|sp).*/, "", num)
+        before = (RSTART > 1) ? substr(s, RSTART - 1, 1) : " "
+        if (before !~ /[a-zA-Z0-9_.-]/ && num + 0 != 0 && num + 0 != 0.5 && num + 0 != 1) hit = hit ", " m
+        s = substr(s, RSTART + RLENGTH)
+      }
+      if (fonts != "" && match(t, "[\"\x27](" fonts ")[\"\x27]")) hit = hit ", " substr(t, RSTART + 1, RLENGTH - 2)
+      if (hit != "") printf "%s:%d: [%s] %s\n", f, cur, substr(hit, 3), t
     }'
 }
 
@@ -70,14 +79,25 @@ design_escape() {
 # any spelling a platform uses (rowClaim, type-row-claim, RowClaim,
 # row_claim) as a whole word.
 role_refs() {
-  # hyphens and underscores become spaces, so type-row-claim reads as
-  # "type row claim" and a key matches as "rowclaim" or "row claim"
-  rr_text=$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_-' '  ')
-  printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | while IFS= read -r rr_k; do
-    rr_l=$(printf '%s' "$rr_k" | tr 'A-Z' 'a-z' | tr -d '_-')
-    rr_s=$(printf '%s' "$rr_k" | sed 's/\([A-Z]\)/ \1/g; s/[_-]/ /g; s/  */ /g; s/^ //' | tr 'A-Z' 'a-z')
-    if printf '%s' "$rr_text" | grep -qE "(^|[^a-z0-9])($rr_l|$rr_s)([^a-z0-9]|$)"; then printf '%s\n' "$rr_k"; fi
-  done
+  # One awk pass over the text with every key at once. The first version
+  # spawned tr, sed and grep per key: 27 keys took 20 seconds a file on
+  # Windows, and a screen with 14 paired blocks took five minutes.
+  rr_keys=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | tr -d '\r' | paste -sd'|' -)
+  [ -n "$rr_keys" ] || return 0
+  printf '%s\n' "$1" | tr 'A-Z' 'a-z' | awk -v keys="$rr_keys" '
+    BEGIN {
+      n = split(keys, k, "|")
+      for (i = 1; i <= n; i++) {
+        j = tolower(k[i]); gsub(/[_-]/, "", j); joined[i] = j
+        # rowClaim reads as "row claim"; type-row-claim as "type row claim"
+        s = k[i]; gsub(/[A-Z]/, " &", s); gsub(/[_-]/, " ", s); gsub(/  +/, " ", s); sub(/^ /, "", s); spaced[i] = tolower(s)
+      }
+    }
+    {
+      line = " " $0 " "; gsub(/[^a-z0-9]/, " ", line)
+      for (i = 1; i <= n; i++) if (!(i in hit) && (index(line, " " joined[i] " ") || index(line, " " spaced[i] " "))) hit[i] = 1
+    }
+    END { for (i = 1; i <= n; i++) if (i in hit) print k[i] }'
 }
 
 # role_mismatch NAME SIDE_A REFS_A SIDE_B REFS_B

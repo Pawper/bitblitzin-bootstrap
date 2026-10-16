@@ -36,3 +36,5 @@ A file-pair check never catches a screen that simply looks different. `screens.t
 ```bash
 sh scripts/design/screens.sh compare today evening
 ```
+
+The check says what it is doing, one line per step, and gives up after 90 seconds naming the step it was in (`DESIGN_CHECK_SECONDS` raises that). A run that prints nothing for minutes is a slow step with a name, never a hang to background and forget.

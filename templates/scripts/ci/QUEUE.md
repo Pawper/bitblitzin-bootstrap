@@ -39,6 +39,8 @@ At start the queue copies `scripts/ci` and the worktree scripts to a temporary f
 
 ## Reading a drain while it runs
 
+`sh scripts/ci/merge-queue.sh --status` prints one line: `running: a --drain started 12 minute(s) ago is still running (pid 4242); last line: ...` or `idle; last line: ...`. Every run's last line in the log is `queue done (exit N); lock released`, written after the deploy and after the lock goes, so a script that waits on the log waits on that line; the lock is logged when taken, too.
+
 Every line the drain prints is also appended, with the time, to `.scratch/queue/log`, including the lines of the batch or serial runs it starts. A drain in the background can be followed with `tail -f .scratch/queue/log`. When the drain ends with "Needs attention", each pull request that failed CI twice comes with its failing check runs by name and the first error lines of each job's log, so the cause is in the output and not three more calls away. A listing that fails is reported as a failed listing and retried, never as an empty queue.
 
 ## Where the batch is built

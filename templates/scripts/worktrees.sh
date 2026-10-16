@@ -54,8 +54,15 @@ count=$(printf '%s\n' "$pairs" | sed '/^$/d' | wc -l | tr -d ' ')
 # One call for every ended pull request: merged or closed, with its branch.
 ends=""
 if command -v gh >/dev/null 2>&1; then
-  ends=$(gh pr list --state closed --limit 500 --json headRefName,mergedAt \
-    --jq '.[] | [(if .mergedAt then "merged" else "closed" end), .headRefName] | @tsv' 2>/dev/null || true)
+  # REST, five pages of a hundred: gh pr list would spend GraphQL points.
+  for p in 1 2 3 4 5; do
+    page=$(gh api "repos/{owner}/{repo}/pulls?state=closed&per_page=100&page=$p" \
+      --jq '.[] | [(if .merged_at then "merged" else "closed" end), .head.ref] | @tsv' 2>/dev/null || true)
+    [ -n "$page" ] || break
+    ends="$ends
+$page"
+  done
+  ends=$(printf '%s\n' "$ends" | sed '/^$/d')
 fi
 # Merged means: its pull request merged, or git says it is merged AND the
 # branch has had commits of its own. Git also calls a branch "merged" when
@@ -136,7 +143,7 @@ case "$cmd" in
   audit)
     now=$(date +%s)
     open_heads=""
-    command -v gh >/dev/null 2>&1 && open_heads=$(gh pr list --state open --limit 200 --json headRefName --jq '.[].headRefName' 2>/dev/null || true)
+    command -v gh >/dev/null 2>&1 && open_heads=$(gh api --paginate "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[].head.ref' 2>/dev/null || true)
     dates=$(git for-each-ref --format='%(refname:short)%09%(committerdate:unix)' refs/heads 2>/dev/null)
     found=0
     for p in $(detached_worktrees "$pairs"); do echo "detached: $p (commits here are on no branch; make one with git -C PATH switch -c NAME)"; found=1; done

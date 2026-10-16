@@ -232,6 +232,25 @@ eq "a Unix path becomes the slug too" "-Users-me-repo" "$(project_slug '/Users/m
 eq "log written an hour ago is recent" "yes" "$(log_is_recent 1000000 1003600)"
 eq "log written three hours ago is not" "no" "$(log_is_recent 1000000 1010800)"
 eq "log with a bad time is not" "no" "$(log_is_recent '' 1000000)"
+eq "gh pr view is GraphQL" "gh pr view" "$(gh_graphql_reason 'gh pr view 12 --json state')"
+eq "gh issue create too" "gh issue create" "$(gh_graphql_reason 'cd x && gh issue create --title t')"
+eq "gh api graphql too" "gh api graphql" "$(gh_graphql_reason 'gh api graphql -f query=q')"
+eq "gh api on a REST path is not" "" "$(gh_graphql_reason 'gh api repos/{owner}/{repo}/pulls/12 --jq .state')"
+eq "gh run and git are not" "" "$(gh_graphql_reason 'gh run list; git push; gh auth status')"
+eq "a cached budget younger than a minute is read" "4120	5000	1760000000	3469	5000	1760000000" "$(budget_cached '1759999950	4120	5000	1760000000	3469	5000	1760000000' 1760000000)"
+eq "a stale cache is not" "" "$(budget_cached '1759999900	4120	5000	1760000000	3469	5000	1760000000' 1760000000)"
+eq "an empty cache is not" "" "$(budget_cached '' 1760000000)"
+eq "the budget is one line" "GraphQL 4,120 of 5,000 left, resets 09:19Z (in 23 min); REST 3,469 of 5,000 left." "$(budget_line "4120	5000	1760001540	3469	5000	1760001540" 1760000200)"
+eq "a low budget says what to do" "GraphQL 312 of 5,000 left, resets 09:19Z (in 23 min); REST 3,469 of 5,000 left. Low: use the REST forms (scripts/issue-open.sh, pr-open.sh, pr-checks.sh, gh api) and wait for the reset; never retry before it." "$(budget_line "312	5000	1760001540	3469	5000	1760001540" 1760000200)"
+eq "no record, no line" "" "$(budget_line '' 1760000200)"
+eq "under the floor is low" "yes" "$(budget_low "312	5000	1760001540	3469	5000	1760001540")"
+eq "at the floor is not" "no" "$(budget_low "500	5000	1760001540	3469	5000	1760001540")"
+eq "an unknown budget is not low" "no" "$(budget_low '')"
+eq "a REST issue without its State label is named" "gh api .../issues" "$(state_label_reason 'gh api -X POST repos/{owner}/{repo}/issues -f title="Fix" -F body=@.scratch/b.md')"
+eq "a REST issue with labels[]=state: passes" "" "$(state_label_reason "gh api -X POST repos/{owner}/{repo}/issues -f title='Fix' -f 'labels[]=state:ready'")"
+eq "a REST issue from --input passes" "" "$(state_label_reason 'gh api -X POST repos/{owner}/{repo}/issues --input .scratch/issue.json')"
+eq "a REST read of an issue is not a create" "" "$(state_label_reason 'gh api repos/{owner}/{repo}/issues/12 --jq .title')"
+eq "a comment on an issue is not a create" "" "$(state_label_reason 'gh api -X POST repos/{owner}/{repo}/issues/12/comments -f body=hi')"
 eq "a low API budget is one line" "GitHub API budget: 312 of 5000 left; resets in 41 minute(s). Poll slowly (30s or more) and run one queue at a time." "$(rate_line "312	5000	3460" 1000)"
 eq "no API budget says so" "GitHub API budget: none left of 5000; resets in 10 minute(s). Do not poll; run the queue with --drain after that." "$(rate_line "0	5000	1600" 1000)"
 eq "a healthy API budget is silent" "" "$(rate_line "4800	5000	1600" 1000)"
@@ -376,6 +395,13 @@ src/a.ts
 dist/')"
 eq "no media, zero" "0" "$(stray_media 'src/a.ts')"
 eq "processes started from the folder" "412	node C:\\Users\\me\\wt\\task\\node_modules\\next\\dist\\bin\\next start" "$(procs_in_dir "$(printf '412\tnode C:\\Users\\me\\wt\\task\\node_modules\\next\\dist\\bin\\next start\n77\tnode D:/other/server.js\n90\tsh C:/Users/me/wt/task/../hooks/scripts/session-brief.sh\n')" 'C:/Users/me/wt/task')"
+eq "a three-column list works too" "412	sh scripts/ci/design-check.sh C:/Users/me/wt/task" "$(procs_in_dir "$(printf '412\t300\tsh scripts/ci/design-check.sh C:/Users/me/wt/task\n')" 'C:/Users/me/wt/task')"
+plist=$(printf '1\t0\twininit\n100\t1\tC:\\app\\claude.exe\n101\t100\tnode mcp-server.js\n102\t100\tbash -c "source /c/Users/me/.claude/shell-snapshots/snap.sh; eval sh scripts/ci/design-check.sh"\n103\t102\tsh scripts/ci/design-check.sh\n104\t100\tsh C:/plugin/hooks/scripts/require-clean-worktree.sh\n105\t100\tsleep 90\n200\t1\tC:\\app\\claude.exe\n201\t200\tsh scripts/other.sh\n300\t1\tnode D:/other/server.js\n')
+eq "scripts this session started, by ancestry, not the hooks, the servers or another session" "102	bash -c \"source /c/Users/me/.claude/shell-snapshots/snap.sh; eval sh scripts/ci/design-check.sh\"
+103	sh scripts/ci/design-check.sh" "$(session_procs "$plist" 104)"
+eq "no claude ancestor, nothing" "" "$(session_procs "$plist" 300)"
+eq "an orphaned script names its relative path" "500	sh scripts/ci/design-check.sh	scripts/ci/design-check.sh
+501	node ./scripts/design/generate.mjs --check	scripts/design/generate.mjs" "$(orphan_scripts "$(printf '1\t0\twininit\n500\t999\tsh scripts/ci/design-check.sh\n501\t998\tnode ./scripts/design/generate.mjs --check\n502\t997\tsleep 90\n503\t1\tsh scripts/live.sh\n')")"
 eq "no process in the folder" "" "$(procs_in_dir "$(printf '77\tnode D:/other/server.js\n')" '/home/me/wt/task')"
 eq "closing a PR with no comment" "gh pr close" "$(pr_close_reason 'gh pr close 41')"
 eq "closing with a comment is fine" "" "$(pr_close_reason 'gh pr close 41 --comment "replaced by #52"')"
@@ -1039,6 +1065,10 @@ eq "a secondary limit too" "yes" "$(rate_limit_hit 'You have exceeded a secondar
 eq "another error is not" "no" "$(rate_limit_hit 'HTTP 404: Not Found')"
 eq "no error is not" "no" "$(rate_limit_hit '')"
 eq "a running drain refuses a second queue" "a --drain started 12 minute(s) ago is still running (pid 4242)" "$(queue_lock_reason "4242	1000	--drain" 1720 yes)"
+eq "a running queue's status" "running: a --drain started 12 minute(s) ago is still running (pid 4242); last line: 10:02 merged #51" "$(queue_status "a --drain started 12 minute(s) ago is still running (pid 4242)" "10:02 merged #51")"
+eq "an idle queue's status" "idle; last line: 10:05 queue done (exit 0); lock released" "$(queue_status "" "10:05 queue done (exit 0); lock released")"
+eq "idle with no log yet" "idle" "$(queue_status "" "")"
+eq "the queue's last word goes to the log after the lock" "yes" "$(grep -q 'queue done (exit \$qe_rc); lock released' "$root/templates/scripts/ci/merge-queue.sh" && grep -c 'echo "queue done"' "$root/templates/scripts/ci/merge-queue.sh" | awk '{ print ($1 == 1) ? "yes" : "no: " $1 }')"
 eq "a lock whose process is gone is free" "" "$(queue_lock_reason "4242	1000	--drain" 1720 no)"
 eq "a lock older than three hours is free" "" "$(queue_lock_reason "4242	1000	--batch" 20000 yes)"
 eq "no lock is free" "" "$(queue_lock_reason '' 1720 yes)"
@@ -1294,7 +1324,7 @@ eq "the feed, newest first, open while unsettled" "t3	block-delete	open
 t2	block-delete	workaround
 t1	block-force-push	followed" "$(resolution_feed "$(printf 't1\tblock-force-push\ts\ta\nt2\tblock-delete\ts\tb\nt3\tblock-delete\ts\tc')" "$(printf 'x\ta\tblock-force-push\ts\tfollowed\nx\tb\tblock-delete\ts\tworkaround')")"
 eq "a hook line from before ids is keyed by its time" "t0	block-delete	followed" "$(resolution_feed "$(printf 't0\tblock-delete')" "$(printf 'x\tt0\tblock-delete\ts\tfollowed')")"
-eq "every refusing hook logs, and the watcher is registered three times" "9 3" "$(grep -l 'refusal-log.sh' "$root"/hooks/scripts/block-*.sh "$root"/hooks/scripts/require-*.sh | wc -l | tr -d ' ') $(grep -c watch-resolution "$root/hooks/hooks.json")"
+eq "every refusing hook logs, and the watcher is registered three times" "10 3" "$(grep -l 'refusal-log.sh' "$root"/hooks/scripts/block-*.sh "$root"/hooks/scripts/require-*.sh | wc -l | tr -d ' ') $(grep -c watch-resolution "$root/hooks/hooks.json")"
 
 printf '\n# one design source for every platform\n'
 . "$root/templates/scripts/design/design-lib.sh"
@@ -1321,12 +1351,14 @@ ddiff='--- a/src/app/a.css
 @@ -3,0 +4,2 @@
 +val pad = 16.dp
 +val c = Color(0xFF1B2638)'
-eq "a raw size, font and colour on an added line are named; hairlines, comments and @media are not" "src/app/a.css:1: .x { padding: 12px; border: 1px solid var(--line); }
-src/app/a.css:3: .y { font-family: \"Figtree\"; }
-src/app/a.css:4: .z { color: #FF9540; }
-android/T.kt:4: val pad = 16.dp
-android/T.kt:5: val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" "$(token_font_names "$dtok")")"
-eq "a project's allow pattern adds to the built-in ones" "android/T.kt:5: val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" '' 'padding|font-family|color: #|\.dp')"
+eq "a raw size, font and colour on an added line are named; hairlines, comments and @media are not" "src/app/a.css:1: [12px] .x { padding: 12px; border: 1px solid var(--line); }
+src/app/a.css:3: [Figtree] .y { font-family: \"Figtree\"; }
+src/app/a.css:4: [#FF9540] .z { color: #FF9540; }
+android/T.kt:4: [16.dp] val pad = 16.dp
+android/T.kt:5: [0xFF1B2638] val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" "$(token_font_names "$dtok")")"
+eq "a long line names the literal found, not the template beside it" 'android/G.kt:9: [40.dp] Text("${pct(v)}%", modifier = Modifier.widthIn(min = 40.dp))' "$(design_literals "$(printf -- '--- a/android/G.kt\n+++ b/android/G.kt\n@@ -8,0 +9,2 @@\n+Text("${pct(v)}%%", modifier = Modifier.widthIn(min = 40.dp))\n+Text("${w}px wide, {speed}x")')" '')"
+eq "a line with several literals names each" 'src/a.css:1: [#ABC, 12px, 8px] .x { margin: 12px 8px; color: #ABC }' "$(design_literals "$(printf -- '--- a/src/a.css\n+++ b/src/a.css\n@@ -0,0 +1 @@\n+.x { margin: 12px 8px; color: #ABC }')" '')"
+eq "a project's allow pattern adds to the built-in ones" "android/T.kt:5: [0xFF1B2638] val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" '' 'padding|font-family|color: #|\.dp')"
 eq "a token by name is never a literal" "" "$(design_literals "$(printf -- '--- a/s.css\n+++ b/s.css\n@@ -0,0 +1,2 @@\n+.x { padding: var(--space-gutter); color: var(--ink); }\n+.y { font: var(--type-body-size) var(--font-sans); }')" 'Figtree')"
 eq "the escape line gives its reason" "a canvas pixel buffer" "$(design_escape "$(printf 'Fix the chime.\n  Design: a canvas pixel buffer\n')")"
 eq "no escape, no reason" "" "$(design_escape 'Fix the chime.')"
