@@ -36,8 +36,13 @@ allow=$(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' scripts/ci/design-allow.txt 2
 # the generated files, the token source and the fonts are never literals
 gen=$(node -e 'const o=require(process.cwd()+"/design/tokens.json").outputs||{};console.log([o.ts,o.css,o.kotlin&&o.kotlin.path,typeof o.swift=="string"?o.swift:o.swift&&o.swift.path].filter(Boolean).join("\n"))' 2>/dev/null)
 excl=$(printf '%s\n' "$gen" | sed '/^$/d; s/^/:(exclude)/')
+# The globs go to git whole: with shell globbing on, src/**/*.tsx expanded
+# two levels deep and no deeper file was ever checked (531 lines seen of
+# 1276 on one project). git's pathspec reads * across folders.
+set -f
 # shellcheck disable=SC2086
 ui_diff=$(git diff -U0 $diff_args -- $ui_globs ':(exclude)design/**' $excl 2>/dev/null)
+set +f
 fonts=$(token_font_names "$(cat design/tokens.json)")
 hits=$(design_literals "$ui_diff" "$fonts" "${allow:-}")
 if [ -n "$hits" ]; then
@@ -58,17 +63,22 @@ if [ -f scripts/ci/parity.txt ]; then
   keys=$(token_role_keys "$(cat design/tokens.json)")
   # shellcheck disable=SC2086
   changed=$(git diff --name-only $diff_args 2>/dev/null)
-  mism=$(parity_pairs "$(cat scripts/ci/parity.txt)" | while IFS="$(printf '\t')" read -r name a b; do
-    case "
+  file_roles() { role_refs "$(git show "${head:-HEAD}:$1" 2>/dev/null || cat "$1" 2>/dev/null)" "$keys"; }
+  # A file several pairs name (a native screen holding many web blocks) is
+  # compared with the union of its partners' roles, once.
+  mism=$(parity_groups "$(parity_pairs "$(cat scripts/ci/parity.txt)")" | while IFS="$(printf '\t')" read -r f partners; do
+    touched=no
+    for x in $f $partners; do case "
 $changed
 " in *"
-$a
-"*|*"
-$b
-"*) ;; *) continue ;; esac
-    ra=$(role_refs "$(git show "${head:-HEAD}:$a" 2>/dev/null || cat "$a" 2>/dev/null)" "$keys")
-    rb=$(role_refs "$(git show "${head:-HEAD}:$b" 2>/dev/null || cat "$b" 2>/dev/null)" "$keys")
-    role_mismatch "$name" "$(basename "$a")" "$ra" "$(basename "$b")" "$rb"
+$x
+"*) touched=yes ;; esac; done
+    [ "$touched" = yes ] || continue
+    rf=$(file_roles "$f")
+    rp=$(for x in $partners; do file_roles "$x"; done | sort -u)
+    np=$(printf '%s\n' $partners | wc -l | tr -d ' ')
+    if [ "$np" -gt 1 ]; then side="the $np files paired with it"; else side=$(basename "$partners"); fi
+    role_mismatch "$(basename "$f")" "$(basename "$f")" "$rf" "$side" "$rp"
   done)
   if [ -n "$mism" ]; then
     echo "A screen pair references different type roles on its two platforms:" >&2

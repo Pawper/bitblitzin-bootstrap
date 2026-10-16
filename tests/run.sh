@@ -1338,9 +1338,14 @@ eq "a word that only contains a key is not a reference" "" "$(role_refs 'const s
 eq "a mismatch names who uses what" "today: a.tsx uses body, T.kt does not
 today: T.kt uses label, a.tsx does not" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'title\nlabel')")"
 eq "matching sides, nothing" "" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'body\ntitle')")"
+eq "a screen of blocks is one comparison against the union" "android/Settings.kt	src/app/settings/a.tsx src/app/settings/b.tsx
+src/app/page.tsx	android/Today.kt" "$(parity_groups "$(parity_pairs "$(printf 'sa src/app/settings/a.tsx android/Settings.kt
+sb src/app/settings/b.tsx android/Settings.kt
+today src/app/page.tsx android/Today.kt')")")"
 eq "parity pairs, comments skipped" "today	src/app/page.tsx	android/Today.kt" "$(parity_pairs "$(printf '# pairs\n\ntoday src/app/page.tsx android/Today.kt\n')")"
 eq "a new file in a paired folder with no pair is named" "src/app/settings/notify.tsx" "$(parity_unpaired "$(printf 'src/app/settings/notify.tsx\nsrc/app/settings/page.tsx\nsrc/app/settings/notes.md\nsrc/lib/x.tsx\nandroid/S.kt')" "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
 eq "a declared one-sided file is not" "" "$(parity_unpaired 'src/app/settings/help.tsx' "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
+eq "the UI globs reach git whole, not expanded by the shell" "1" "$(grep -c '^set -f$' "$root/templates/scripts/ci/design-check.sh")"
 eq "the check names unpaired files and shows the fix" "1" "$(grep -c 'parity_unpaired "\$(git diff --name-only --diff-filter=AM' "$root/templates/scripts/ci/design-check.sh")"
 eq "day numbers" "20741 20742" "$(day_number 2026-10-15) $(day_number 2026-10-16)"
 eq "screens never compared, then stale, worst first" "evening: never
