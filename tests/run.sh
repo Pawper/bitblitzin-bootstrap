@@ -1341,6 +1341,7 @@ eq "matching sides, nothing" "" "$(role_mismatch today a.tsx "$(printf 'title\nb
 eq "parity pairs, comments skipped" "today	src/app/page.tsx	android/Today.kt" "$(parity_pairs "$(printf '# pairs\n\ntoday src/app/page.tsx android/Today.kt\n')")"
 eq "a new file in a paired folder with no pair is named" "src/app/settings/notify.tsx" "$(parity_unpaired "$(printf 'src/app/settings/notify.tsx\nsrc/app/settings/page.tsx\nsrc/app/settings/notes.md\nsrc/lib/x.tsx\nandroid/S.kt')" "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
 eq "a declared one-sided file is not" "" "$(parity_unpaired 'src/app/settings/help.tsx' "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
+eq "the UI globs reach git whole, not expanded by the shell" "1" "$(grep -c '^set -f$' "$root/templates/scripts/ci/design-check.sh")"
 eq "the check names unpaired files and shows the fix" "1" "$(grep -c 'parity_unpaired "\$(git diff --name-only --diff-filter=AM' "$root/templates/scripts/ci/design-check.sh")"
 eq "day numbers" "20741 20742" "$(day_number 2026-10-15) $(day_number 2026-10-16)"
 eq "screens never compared, then stale, worst first" "evening: never

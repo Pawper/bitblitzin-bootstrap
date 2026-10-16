@@ -36,8 +36,13 @@ allow=$(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' scripts/ci/design-allow.txt 2
 # the generated files, the token source and the fonts are never literals
 gen=$(node -e 'const o=require(process.cwd()+"/design/tokens.json").outputs||{};console.log([o.ts,o.css,o.kotlin&&o.kotlin.path,typeof o.swift=="string"?o.swift:o.swift&&o.swift.path].filter(Boolean).join("\n"))' 2>/dev/null)
 excl=$(printf '%s\n' "$gen" | sed '/^$/d; s/^/:(exclude)/')
+# The globs go to git whole: with shell globbing on, src/**/*.tsx expanded
+# two levels deep and no deeper file was ever checked (531 lines seen of
+# 1276 on one project). git's pathspec reads * across folders.
+set -f
 # shellcheck disable=SC2086
 ui_diff=$(git diff -U0 $diff_args -- $ui_globs ':(exclude)design/**' $excl 2>/dev/null)
+set +f
 fonts=$(token_font_names "$(cat design/tokens.json)")
 hits=$(design_literals "$ui_diff" "$fonts" "${allow:-}")
 if [ -n "$hits" ]; then
