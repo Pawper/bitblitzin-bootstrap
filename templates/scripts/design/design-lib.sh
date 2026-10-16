@@ -145,3 +145,23 @@ parity_unpaired() {
     if printf '%s\n' "$pu_dirs" | grep -qxF "$pu_d	$pu_e"; then printf '%s\n' "$pu_p"; fi
   done
 }
+
+# parity_groups PAIRS
+# PAIRS is parity_pairs output. One line per comparison to make:
+# "FILE<TAB>PARTNER PARTNER ..." for a file that several pairs name (a
+# native screen paired with each web block it holds): its roles are
+# compared with the union of its partners', so a block is never measured
+# against the whole screen alone. A pair whose files are in no other pair
+# is one line "A<TAB>B".
+parity_groups() {
+  printf '%s\n' "$1" | awk -F'\t' '
+    NF >= 3 { a[NR] = $2; b[NR] = $3; n[$2]++; n[$3]++; p[$2] = p[$2] " " $3; p[$3] = p[$3] " " $2 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (a[i] == "") continue
+        if (n[a[i]] >= 2) { if (!(a[i] in done)) { done[a[i]] = 1; sub(/^ /, "", p[a[i]]); print a[i] "\t" p[a[i]] } }
+        if (n[b[i]] >= 2) { if (!(b[i] in done)) { done[b[i]] = 1; sub(/^ /, "", p[b[i]]); print b[i] "\t" p[b[i]] } }
+        if (n[a[i]] < 2 && n[b[i]] < 2) print a[i] "\t" b[i]
+      }
+    }'
+}

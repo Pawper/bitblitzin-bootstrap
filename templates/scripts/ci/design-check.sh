@@ -63,17 +63,22 @@ if [ -f scripts/ci/parity.txt ]; then
   keys=$(token_role_keys "$(cat design/tokens.json)")
   # shellcheck disable=SC2086
   changed=$(git diff --name-only $diff_args 2>/dev/null)
-  mism=$(parity_pairs "$(cat scripts/ci/parity.txt)" | while IFS="$(printf '\t')" read -r name a b; do
-    case "
+  file_roles() { role_refs "$(git show "${head:-HEAD}:$1" 2>/dev/null || cat "$1" 2>/dev/null)" "$keys"; }
+  # A file several pairs name (a native screen holding many web blocks) is
+  # compared with the union of its partners' roles, once.
+  mism=$(parity_groups "$(parity_pairs "$(cat scripts/ci/parity.txt)")" | while IFS="$(printf '\t')" read -r f partners; do
+    touched=no
+    for x in $f $partners; do case "
 $changed
 " in *"
-$a
-"*|*"
-$b
-"*) ;; *) continue ;; esac
-    ra=$(role_refs "$(git show "${head:-HEAD}:$a" 2>/dev/null || cat "$a" 2>/dev/null)" "$keys")
-    rb=$(role_refs "$(git show "${head:-HEAD}:$b" 2>/dev/null || cat "$b" 2>/dev/null)" "$keys")
-    role_mismatch "$name" "$(basename "$a")" "$ra" "$(basename "$b")" "$rb"
+$x
+"*) touched=yes ;; esac; done
+    [ "$touched" = yes ] || continue
+    rf=$(file_roles "$f")
+    rp=$(for x in $partners; do file_roles "$x"; done | sort -u)
+    np=$(printf '%s\n' $partners | wc -l | tr -d ' ')
+    if [ "$np" -gt 1 ]; then side="the $np files paired with it"; else side=$(basename "$partners"); fi
+    role_mismatch "$(basename "$f")" "$(basename "$f")" "$rf" "$side" "$rp"
   done)
   if [ -n "$mism" ]; then
     echo "A screen pair references different type roles on its two platforms:" >&2
