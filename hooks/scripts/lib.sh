@@ -458,8 +458,11 @@ stdin_wait_reason() {
 # Print "gh pr merge" when the command merges a pull request directly with
 # gh, outside the merge queue. Turning auto-merge off is allowed. Print
 # nothing otherwise. The caller decides whether the project has a queue.
+# Both merge checks read the command's own words: the contents of quoted
+# strings go first (code_only), so a printf that writes a body mentioning
+# merge-queue.sh and five numbers is prose, not a merge.
 direct_merge_reason() {
-  split_commands "$1" | awk '
+  split_commands "$(code_only "$1")" | awk '
     {
       line = $0
       gsub(/["'\'']/, "", line)
@@ -472,7 +475,7 @@ direct_merge_reason() {
 }
 
 batch_merge_reason() {
-  split_commands "$1" | awk '
+  split_commands "$(code_only "$1")" | awk '
     {
       line = $0
       gsub(/["'\'']/, "", line)
