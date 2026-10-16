@@ -494,7 +494,23 @@ batch_merge_reason() {
 # that starts with "state:". Print nothing when the label is there, when the
 # command opens the browser form instead, or when it is not an issue creation.
 state_label_reason() {
-  split_commands "$1" | awk '
+  # gh's {owner} and {repo} placeholders are not shell groups
+  split_commands "$(printf '%s' "$1" | sed 's/{owner}/OWNER/g; s/{repo}/REPO/g')" | awk '
+    # The REST form: gh api ... repos/O/R/issues with a title and no
+    # labels[]=state:... (a body from --input is not read; it passes).
+    {
+      line = $0; gsub(/["\x27]/, "", line)
+      n = split(line, t, /[ \t]+/)
+      if (t[1] == "gh" && t[2] == "api") {
+        issues = 0; creates = 0; found = 0
+        for (j = 3; j <= n; j++) {
+          if (t[j] ~ /(^|\/)issues(\?.*)?$/) issues = 1
+          if (t[j] ~ /^title=/) creates = 1
+          if (t[j] == "--input" || t[j] ~ /^labels\[\]=[ \t]*state:/ || t[j] ~ /^labels=.*state:/) found = 1
+        }
+        if (issues && creates && !found) { print "gh api .../issues"; exit }
+      }
+    }
     {
       line = $0
       n = split(line, t, /[ \t]+/)
@@ -531,4 +547,74 @@ project_flag_reason() {
       for (j = 4; j <= n; j++) if (t[j] == "--web" || t[j] == "-w" || t[j] == "--project" || t[j] == "-p" || t[j] ~ /^--project=/) found = 1
       if (!found) { print "gh issue create"; exit }
     }'
+}
+
+# gh_graphql_reason COMMAND
+# Print the first gh command form in COMMAND that spends GraphQL points
+# ("gh pr view", "gh issue create", "gh project item-list", "gh search
+# issues", "gh api graphql"), or nothing. gh api on a REST path, gh run,
+# gh auth and the rest are REST and cost nothing here.
+gh_graphql_reason() {
+  split_commands "$(printf '%s' "$1" | sed 's/{owner}/OWNER/g; s/{repo}/REPO/g')" | awk '
+    {
+      n = split($0, t, /[ \t]+/)
+      for (i = 1; i < n; i++) if (t[i] == "gh") {
+        s = t[i + 1]
+        if (s == "issue" || s == "pr" || s == "project" || s == "search") { print "gh " s " " t[i + 2]; exit }
+        if (s == "api" && t[i + 2] == "graphql") { print "gh api graphql"; exit }
+      }
+    }'
+}
+
+# The budget record: "graphql_left graphql_limit graphql_reset rest_left
+# rest_limit rest_reset", tab-separated, as budget_fetch reads it from
+# gh api rate_limit (an endpoint that is itself free). budget_read caches
+# it in .scratch/gh-budget.txt for a minute, first field the epoch it was
+# read, so seven agents and a queue share one reading.
+BUDGET_JQ='[.resources.graphql.remaining, .resources.graphql.limit, .resources.graphql.reset, .resources.core.remaining, .resources.core.limit, .resources.core.reset] | @tsv'
+
+# budget_cached CACHE_TEXT NOW [MAX_AGE]
+# Print the record from a cache line "epoch<TAB>record" younger than
+# MAX_AGE seconds (default 60); nothing when it is stale or empty.
+budget_cached() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v now="$2" -v max="${3:-60}" '
+    NR == 1 && NF >= 7 && now - $1 >= 0 && now - $1 < max { print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 }'
+}
+
+# budget_line RECORD NOW [FLOOR]
+# One line for the brief and the hook: "GraphQL 4,120 of 5,000 left, resets
+# 09:19Z (in 23 min); REST 3,469 of 5,000 left." Under FLOOR GraphQL points
+# (default 500) it ends with what to do; nothing for an empty record.
+budget_line() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v now="$2" -v floor="${3:-500}" '
+    function commas(n,  s) { s = sprintf("%d", n); while (s ~ /[0-9][0-9][0-9][0-9]/) sub(/[0-9][0-9][0-9]$|[0-9][0-9][0-9],/, ",&", s); return s }
+    NR == 1 && NF >= 6 && $1 != "" {
+      mins = int(($3 - now + 59) / 60); if (mins < 0) mins = 0
+      printf "GraphQL %s of %s left, resets %s (in %d min); REST %s of %s left.", commas($1), commas($2), sprintf("%02d:%02dZ", int(($3 % 86400) / 3600), int(($3 % 3600) / 60)), mins, commas($4), commas($5)
+      if ($1 + 0 < floor) printf " Low: use the REST forms (scripts/issue-open.sh, pr-open.sh, pr-checks.sh, gh api) and wait for the reset; never retry before it."
+      printf "\n"
+    }'
+}
+
+# budget_low RECORD [FLOOR]
+# "yes" when fewer than FLOOR (default 500) GraphQL points are left, "no"
+# otherwise or when the record is empty (an unknown budget blocks nothing).
+budget_low() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v floor="${2:-500}" '
+    NR == 1 && NF >= 6 && $1 != "" && $1 + 0 < floor { low = 1 } END { print (low ? "yes" : "no") }'
+}
+
+# budget_read ROOT
+# The record, from the cache when it is younger than a minute, else from
+# gh api rate_limit (bounded, free), which refreshes the cache. Empty when
+# gh is absent or the call fails.
+budget_read() {
+  br_file="$1/.scratch/gh-budget.txt"; br_now=$(date +%s)
+  br_rec=$(budget_cached "$(head -n 1 "$br_file" 2>/dev/null)" "$br_now")
+  [ -n "$br_rec" ] && { printf '%s\n' "$br_rec"; return 0; }
+  command -v gh >/dev/null 2>&1 || return 0
+  br_rec=$(gh api rate_limit --jq "$BUDGET_JQ" 2>/dev/null | tr -d '\r') || br_rec=""
+  [ -n "$br_rec" ] || return 0
+  mkdir -p "$1/.scratch" 2>/dev/null && printf '%s\t%s\n' "$br_now" "$br_rec" > "$br_file" 2>/dev/null
+  printf '%s\n' "$br_rec"
 }

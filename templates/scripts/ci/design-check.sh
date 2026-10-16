@@ -10,12 +10,25 @@
 # check reads (default: src/**/*.tsx, *.css, android **/*.kt, ios **/*.swift);
 # scripts/ci/design-allow.txt holds one regex per line of lines to allow.
 # A literal that must stay says why in the body: "Design: <reason>".
+# Each step says when it starts, so a long run is visibly a slow step and
+# not a hang, and the whole check gives up after DESIGN_CHECK_SECONDS
+# (default 90), naming the step it was in.
 here=$(dirname "$0")
 . "$here/../design/design-lib.sh"
 [ -f design/tokens.json ] || { echo "No design/tokens.json; nothing to check."; exit 0; }
 
+budget=${DESIGN_CHECK_SECONDS:-90}
+step="starting"
+step() { step=$1; echo "design-check: $1"; }
+# The watchdog sleeps a second at a time, so ending it leaves nothing behind.
+( i=0; while [ "$i" -lt "$budget" ]; do sleep 1; i=$((i + 1)); done; kill -TERM $$ 2>/dev/null ) &
+watchdog=$!
+trap 'echo "design-check.sh gave up after ${budget}s during: $step (DESIGN_CHECK_SECONDS raises the budget)" >&2; kill "$watchdog" 2>/dev/null; exit 1' TERM
+done_check() { kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; }
+
 fail=0
 # 1. generated files current
+step "generated files current (node scripts/design/generate.mjs --check)"
 if command -v node >/dev/null 2>&1; then
   node scripts/design/generate.mjs --check || fail=1
 else
@@ -26,6 +39,7 @@ base=${1:-origin/main}; head=${2:-}
 if [ -n "$head" ]; then range="$base $head"; diff_args="$base $head"; else range="$base"; diff_args="$base"; fi
 
 # 2. literals in UI files
+step "literals added to UI files (git diff $range over scripts/ci/design-ui.txt)"
 ui_globs=$(sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' scripts/ci/design-ui.txt 2>/dev/null)
 [ -n "$ui_globs" ] || ui_globs='src/**/*.tsx
 src/**/*.ts
@@ -41,7 +55,7 @@ excl=$(printf '%s\n' "$gen" | sed '/^$/d; s/^/:(exclude)/')
 # 1276 on one project). git's pathspec reads * across folders.
 set -f
 # shellcheck disable=SC2086
-ui_diff=$(git diff -U0 $diff_args -- $ui_globs ':(exclude)design/**' $excl 2>/dev/null)
+ui_diff=$(git diff -U0 $diff_args -- $ui_globs ':(exclude)design/**' ':(exclude)**/node_modules/**' ':(exclude)**/build/**' $excl 2>/dev/null)
 set +f
 fonts=$(token_font_names "$(cat design/tokens.json)")
 hits=$(design_literals "$ui_diff" "$fonts" "${allow:-}")
@@ -60,9 +74,10 @@ fi
 
 # 3. role parity per screen pair the change touches
 if [ -f scripts/ci/parity.txt ]; then
+  step "role parity per screen pair the change touches (scripts/ci/parity.txt)"
   keys=$(token_role_keys "$(cat design/tokens.json)")
   # shellcheck disable=SC2086
-  changed=$(git diff --name-only $diff_args 2>/dev/null)
+  changed=$(git diff --name-only $diff_args -- . ':(exclude)**/node_modules/**' ':(exclude)**/build/**' 2>/dev/null)
   file_roles() { role_refs "$(git show "${head:-HEAD}:$1" 2>/dev/null || cat "$1" 2>/dev/null)" "$keys"; }
   # A file several pairs name (a native screen holding many web blocks) is
   # compared with the union of its partners' roles, once.
@@ -92,8 +107,9 @@ fi
 
 # 4. a file under a screen folder that no pair lists
 if [ -f scripts/ci/parity.txt ]; then
+  step "files under a paired screen folder that no pair lists"
   # shellcheck disable=SC2086
-  unp=$(parity_unpaired "$(git diff --name-only --diff-filter=AM $diff_args 2>/dev/null)" "$(cat scripts/ci/parity.txt)")
+  unp=$(parity_unpaired "$(git diff --name-only --diff-filter=AM $diff_args -- . ':(exclude)**/node_modules/**' ':(exclude)**/build/**' 2>/dev/null)" "$(cat scripts/ci/parity.txt)")
   if [ -n "$unp" ]; then
     echo "These files sit in a folder that scripts/ci/parity.txt pairs across platforms, but are in no pair themselves:" >&2
     printf '%s\n' "$unp" | sed 's/^/  /' >&2
@@ -104,5 +120,6 @@ if [ -f scripts/ci/parity.txt ]; then
   fi
 fi
 
+done_check
 [ "$fail" -eq 0 ] && echo "Design check passed."
 exit $fail

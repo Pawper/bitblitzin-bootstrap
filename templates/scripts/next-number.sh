@@ -32,7 +32,7 @@ if [ -n "$prefix" ]; then
   base_ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
   texts=$(git show "$base_ref:$glob" 2>/dev/null || true)
   open=""
-  command -v gh >/dev/null 2>&1 && open=$(gh pr list --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true)
+  command -v gh >/dev/null 2>&1 && open=$(gh api "repos/{owner}/{repo}/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null || true)
   if [ -n "$open" ]; then
     specs=""; for n in $open; do specs="$specs +refs/pull/$n/head:refs/remotes/origin/pr/$n"; done
     git fetch -q origin $specs 2>/dev/null || true
@@ -50,6 +50,8 @@ git fetch -q origin 2>/dev/null || true
 on_main=$(git ls-tree -r --name-only "$default" 2>/dev/null || true)
 in_prs=""
 # gh only with a GitHub remote: without one gh asks which repository and waits.
+# This one stays GraphQL: the files of every open pull request in one call,
+# where REST would be one call per pull request.
 case "$(git remote get-url origin 2>/dev/null)" in
   *github.com*) command -v gh >/dev/null 2>&1 && in_prs=$(gh pr list --state open --limit 100 --json files --jq '.[].files[].path' 2>/dev/null || true) ;;
 esac

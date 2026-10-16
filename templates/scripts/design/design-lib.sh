@@ -79,14 +79,25 @@ design_escape() {
 # any spelling a platform uses (rowClaim, type-row-claim, RowClaim,
 # row_claim) as a whole word.
 role_refs() {
-  # hyphens and underscores become spaces, so type-row-claim reads as
-  # "type row claim" and a key matches as "rowclaim" or "row claim"
-  rr_text=$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr '_-' '  ')
-  printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | while IFS= read -r rr_k; do
-    rr_l=$(printf '%s' "$rr_k" | tr 'A-Z' 'a-z' | tr -d '_-')
-    rr_s=$(printf '%s' "$rr_k" | sed 's/\([A-Z]\)/ \1/g; s/[_-]/ /g; s/  */ /g; s/^ //' | tr 'A-Z' 'a-z')
-    if printf '%s' "$rr_text" | grep -qE "(^|[^a-z0-9])($rr_l|$rr_s)([^a-z0-9]|$)"; then printf '%s\n' "$rr_k"; fi
-  done
+  # One awk pass over the text with every key at once. The first version
+  # spawned tr, sed and grep per key: 27 keys took 20 seconds a file on
+  # Windows, and a screen with 14 paired blocks took five minutes.
+  rr_keys=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | tr -d '\r' | paste -sd'|' -)
+  [ -n "$rr_keys" ] || return 0
+  printf '%s\n' "$1" | tr 'A-Z' 'a-z' | awk -v keys="$rr_keys" '
+    BEGIN {
+      n = split(keys, k, "|")
+      for (i = 1; i <= n; i++) {
+        j = tolower(k[i]); gsub(/[_-]/, "", j); joined[i] = j
+        # rowClaim reads as "row claim"; type-row-claim as "type row claim"
+        s = k[i]; gsub(/[A-Z]/, " &", s); gsub(/[_-]/, " ", s); gsub(/  +/, " ", s); sub(/^ /, "", s); spaced[i] = tolower(s)
+      }
+    }
+    {
+      line = " " $0 " "; gsub(/[^a-z0-9]/, " ", line)
+      for (i = 1; i <= n; i++) if (!(i in hit) && (index(line, " " joined[i] " ") || index(line, " " spaced[i] " "))) hit[i] = 1
+    }
+    END { for (i = 1; i <= n; i++) if (i in hit) print k[i] }'
 }
 
 # role_mismatch NAME SIDE_A REFS_A SIDE_B REFS_B

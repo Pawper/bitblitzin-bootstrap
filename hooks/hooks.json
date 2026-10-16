@@ -1,5 +1,5 @@
 {
-  "description": "Enforces the Bitblitzin Bootstrap rules: no deletes, no forced pushes, no full test sweeps, no direct edits to generated pages, no issue filed without a State label, no agent dispatched without a fitting model, no serial merge of more than two pull requests without a named mode, no pull request closed without a comment, no detached worktree; refuses to finish a task in a worktree that is not clean; and prints the project's live state and the drive's proposal at session start; and notes what an agent did after each refusal, for the console's resolution feed.",
+  "description": "Enforces the Bitblitzin Bootstrap rules: no deletes, no forced pushes, no full test sweeps, no direct edits to generated pages, no issue filed without a State label, no GraphQL call when the hour's budget is nearly spent, no agent dispatched without a fitting model, no serial merge of more than two pull requests without a named mode, no pull request closed without a comment, no detached worktree; refuses to finish a task in a worktree that is not clean; and prints the project's live state and the drive's proposal at session start; and notes what an agent did after each refusal, for the console's resolution feed.",
   "hooks": {
     "SessionStart": [
       {
@@ -87,6 +87,12 @@
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/require-batch-merge.sh\"",
             "timeout": 10,
             "statusMessage": "Checking the merge names its mode"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/scripts/require-gh-budget.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking the GitHub API budget"
           }
         ]
       },

@@ -65,6 +65,17 @@ add "Plugin: $(cd "$here/../.." && pwd). In the Bash tool \$CLAUDE_PLUGIN_ROOT i
 # agent that dates things from them writes tomorrow's date all evening.
 add "$(today_line "$(date '+%A %Y-%m-%d, %H:%M %Z')" "$timezone")"
 
+# The API budget, one line, in a project with a GitHub remote. Reading
+# rate_limit is free, and the reading is cached a minute in .scratch for
+# the require-gh-budget hook and scripts/gh-budget.sh.
+case "$(git remote get-url origin 2>/dev/null)" in
+  *github.com*) if command -v gh >/dev/null 2>&1; then
+    rl=$(run_bounded 5 sh -c '. "$1/lib.sh"; budget_read "$2"' sh "$here" "$(pwd)" 2>/dev/null || true)
+    rl_line=$(budget_line "$rl" "$(date +%s)")
+    [ -n "$rl_line" ] && add "Budget: $rl_line"
+  fi ;;
+esac
+
 have_git=no
 if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then have_git=yes; fi
 
@@ -142,14 +153,6 @@ if has queue && [ -n "$queue_glob" ]; then
       add "Queue: no run in the last two hours."
     fi
   fi
-fi
-
-# API budget, only when it is low. Reading rate_limit does not count
-# against it, so this adds nothing to the budget the brief spends.
-if has queue && command -v gh >/dev/null 2>&1; then
-  rl=$(run_bounded 5 gh api rate_limit --jq '.resources.core | "\(.remaining)\t\(.limit)\t\(.reset)"' 2>/dev/null || true)
-  rl_line=$(rate_line "$rl" "$(date +%s)")
-  [ -n "$rl_line" ] && add "$rl_line"
 fi
 
 # Runners, only when the workflows use self-hosted ones and none is online:

@@ -6,7 +6,9 @@
 # the way. Before the agent may finish it checks three things:
 #   1. nothing modified or untracked outside the scratch folder (.scratch/);
 #   2. no images, video or build output left in the worktree;
-#   3. no process still running from the worktree folder.
+#   3. no process still running from the worktree folder, and at the
+#      session'\''s end none started by this session that runs a script
+#      (a check run as "sh scripts/ci/design-check.sh" names no folder).
 # It refuses once, names what it found, and says what to do. It kills
 # nothing and removes nothing. If the agent stops again without fixing it,
 # the second stop goes through, so a session can never be trapped.
@@ -40,14 +42,31 @@ fi
 
 here_path=$(pwd -W 2>/dev/null || pwd)
 if command -v powershell >/dev/null 2>&1 && [ -n "$WINDIR" ]; then
-  plist=$(powershell -NoProfile -Command 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }' 2>/dev/null)
+  plist=$(powershell -NoProfile -Command 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)" }' 2>/dev/null)
+  # the process list holds Windows ids; $$ is the MSYS one
+  me=$(ps -p $$ 2>/dev/null | awk 'NR == 2 { print $4 }')
 else
-  plist=$(ps -eo pid=,args= 2>/dev/null | awk '{ pid = $1; $1 = ""; sub(/^ /, ""); print pid "\t" $0 }')
+  plist=$(ps -eo pid=,ppid=,args= 2>/dev/null | awk '{ pid = $1; ppid = $2; $1 = ""; $2 = ""; sub(/^ +/, ""); print pid "\t" ppid "\t" $0 }')
+  me=$$
 fi
-running=$(procs_in_dir "$plist" "$here_path" | grep -v "	.*$$" | head -n 3)
+running=$(procs_in_dir "$plist" "$here_path")
+# At the session's end (Stop, not a subagent's, whose parent may be mid-command),
+# every script this session started and left running counts too.
+if [ "$(json_field "$input" hook_event_name)" = Stop ] && [ -n "$me" ]; then
+  running="$running
+$(session_procs "$plist" "$me")"
+  # A script left behind by a shell that already ended has no living parent
+  # to place it; its relative path, found under this folder, does.
+  orphans=$(orphan_scripts "$plist" | while IFS="$(printf '\t')" read -r opid ocmd orel; do
+    if [ -f "$orel" ]; then printf '%s\t%s\n' "$opid" "$ocmd"; fi
+  done)
+  running="$running
+$orphans"
+fi
+running=$(printf '%s\n' "$running" | sed '/^$/d' | grep -v "	.*$$" | sort -u -t'	' -k1,1n | head -n 3)
 if [ -n "$running" ]; then
   names=$(printf '%s\n' "$running" | awk -F'\t' '{ c = $2; if (length(c) > 60) c = substr(c, 1, 60) "..."; printf "%s (%s); ", $1, c }')
-  problems="$problems Processes started from this worktree are still running: $names stop them before finishing."
+  problems="$problems Processes this session started are still running: $names stop them before finishing (TaskStop for a background task; a check that runs on is a bug to report, not to leave)."
 fi
 
 [ -n "$problems" ] || exit 0

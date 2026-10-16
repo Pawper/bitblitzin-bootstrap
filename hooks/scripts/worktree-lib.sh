@@ -30,18 +30,53 @@ stray_media() {
 }
 
 # procs_in_dir LIST DIR
-# LIST is one process per line as "PID<TAB>COMMAND LINE". Print the lines
-# whose command line mentions DIR, with either slash and in any case,
+# LIST is one process per line as "PID<TAB>COMMAND LINE" or
+# "PID<TAB>PARENT<TAB>COMMAND LINE". Print "PID<TAB>COMMAND LINE" for the
+# lines whose command line mentions DIR, with either slash and in any case,
 # leaving out this plugin'\''s own hooks and the agent itself.
 procs_in_dir() {
   pd=$(printf '%s' "$2" | tr '\\' '/' | tr 'A-Z' 'a-z')
   printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v dir="$pd" '
     NF >= 2 {
-      c = tolower($2); gsub(/\\/, "/", c)
+      cmd = (NF >= 3) ? $3 : $2
+      c = tolower(cmd); gsub(/\\/, "/", c)
       if (index(c, dir) == 0) next
       if (c ~ /require-clean-worktree|session-brief|hooks\/scripts|get-ciminstance|claude/) next
-      print $1 "\t" $2
+      print $1 "\t" cmd
     }'
+}
+
+# session_procs LIST ME
+# LIST is one process per line as "PID<TAB>PARENT<TAB>COMMAND LINE"; ME is
+# the hook'\''s own process id. Print "PID<TAB>COMMAND LINE" for every
+# process under the same session (the nearest ancestor of ME whose command
+# names claude) whose command line names a script (.sh, .mjs, .js, .py,
+# gradle...), leaving out ME'\''s own chain, the plugin'\''s hooks and the
+# session'\''s servers. A check run as "sh scripts/ci/design-check.sh" has
+# no folder in its command line, so the folder match alone never saw it;
+# four of them outlived their agents one afternoon.
+session_procs() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' -v me="$2" '
+    NF >= 3 { pp[$1] = $2; cmd[$1] = $3 }
+    END {
+      root = ""
+      for (p = me; (p in pp) && p != pp[p] && !(p in mine); p = pp[p]) {
+        mine[p] = 1
+        c = tolower(cmd[p]); gsub(/\\/, "/", c)
+        # the claude executable, not a shell whose snapshot lives under ~/.claude
+        if (root == "" && c ~ /(^|[\/"])claude(\.exe)?(["\x27 ]|$)/) root = p
+      }
+      if (root == "") exit
+      for (p in cmd) {
+        if (p in mine) continue
+        c = tolower(cmd[p]); gsub(/\\/, "/", c)
+        if (c ~ /hooks\/scripts|get-ciminstance|(^|[\/"])claude(\.exe)?(["\x27 ]|$)|mcp|conhost/) continue
+        if (c !~ /\.(sh|bash|mjs|cjs|js|py|ts|kts)([ "\x27]|$)|gradlew|[ \/]gradle([ .]|$)/) continue
+        n = 0
+        for (q = pp[p]; (q in pp) && q != root && q != pp[q] && n < 200; q = pp[q]) n++
+        if (q == root) print p "\t" cmd[p]
+      }
+    }' | sort -n
 }
 
 # pr_close_reason COMMAND
@@ -94,3 +129,26 @@ stale_worktrees() {
     }
     END { printf "%d\t%d\n", stale + 0, detached + 0 }'
 }
+# orphan_scripts LIST
+# LIST as for session_procs. Print "PID<TAB>COMMAND LINE<TAB>RELATIVE PATH"
+# for every process whose parent is gone (a script started with & from a
+# shell that then ended; Windows keeps the dead parent'\''s id) and whose
+# command line names a script by a relative path under scripts/, .scratch/,
+# tests/ or status/. The caller keeps the ones whose path exists in its
+# folder: ancestry cannot place an orphan, the file can.
+orphan_scripts() {
+  printf '%s\n' "$1" | tr -d '\r' | awk -F'\t' '
+    NF >= 3 { pp[$1] = $2; cmd[$1] = $3 }
+    END {
+      for (p in cmd) {
+        if (pp[p] in cmd) continue
+        c = cmd[p]; gsub(/\\/, "/", c)
+        if (tolower(c) ~ /hooks\/scripts|get-ciminstance/) continue
+        if (match(c, /(^|[ "\x27])(\.\/)?(scripts|\.scratch|tests|status)\/[^ "\x27]+\.(sh|mjs|cjs|js|py|ts|kts)([ "\x27]|$)/)) {
+          r = substr(c, RSTART, RLENGTH); gsub(/^[ "\x27]+|[ "\x27]+$/, "", r); sub(/^\.\//, "", r)
+          print p "\t" cmd[p] "\t" r
+        }
+      }
+    }' | sort -n
+}
+
