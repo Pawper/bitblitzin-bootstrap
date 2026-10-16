@@ -53,3 +53,20 @@ Two small changes to the `checks` job, for a project already on the layout above
      sh scripts/ci/spec-check.sh "$BASE" "${{ github.sha }}"
    ```
    A project's own body-reading checks can do the same.
+
+## 0.14.0: the design step
+
+A project that adopts `design/tokens.json` adds one step to the `checks` job, after the client env check:
+
+```yaml
+      - name: Fail when a screen gains a literal colour, size or font, or the design files are stale
+        if: github.event_name == 'pull_request' && hashFiles('design/tokens.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SPEC_TEXT=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" --jq '.title + "\n" + (.body // "")' 2>/dev/null) || SPEC_TEXT="${{ github.event.pull_request.title }}"
+          export SPEC_TEXT
+          sh scripts/ci/design-check.sh "$BASE" "${{ github.sha }}"
+```
+
+It needs Node on the runner (the generator) and `pull-requests: read` (the live body, for a `Design:` line). A project without `design/tokens.json` is untouched: the step skips itself.

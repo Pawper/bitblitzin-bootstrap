@@ -51,7 +51,7 @@ batch_branch_name() {
 # A batch body without them failed spec-check on every src-only batch and
 # left every member's issue open after the merge.
 carried_refs() {
-  printf '%s\n' "$1" | tr -d '\r' | awk -v ks="${QUEUE_CARRY_KEYS:-Parity Twin}" '
+  printf '%s\n' "$1" | tr -d '\r' | awk -v ks="${QUEUE_CARRY_KEYS:-Parity Twin Design}" '
     BEGIN { nk = split(ks, keys, " ") }
     {
       line = $0

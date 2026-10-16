@@ -250,7 +250,7 @@ b
 c
 d' 2)"
 eq "a clear prints the short form" "main inprogress" "$(brief_sections clear)"
-eq "a startup prints everything" "main prs queue inprogress leftover handoff owner proposal" "$(brief_sections startup)"
+eq "a startup prints everything" "main prs queue inprogress leftover screens handoff owner proposal" "$(brief_sections startup)"
 facts=$(cat "$fx/board-facts.tsv")
 eq "pr lines from the one-call facts" "#41 Add retries (mergeable, CI green)
 #42 Fix the parser (has conflicts, CI red)
@@ -888,15 +888,22 @@ tail_tests=$(cd "$root" && for f in $(git ls-files '*.sh'); do
   awk -v f="$f" '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { if (l[i] !~ /\][ \t]*&&/ || l[i] ~ /\|\|/) continue; j = i + 1; while (j <= NR && l[j] ~ /^[ \t]*(#.*)?$/) j++; if (j <= NR && l[j] ~ /^[ \t]*done/) printf "%s:%d\n", f, i } }' "$f"
 done)
 eq "no loop in any script ends on a bare test" "" "$tail_tests"
+# The same on one line: "do [ test ] && cmd; done". The settle loop after a
+# merged batch ended the next round that way (its members read as closed,
+# not merged, for a moment).
+oneline_tests=$(cd "$root" && grep -rnE 'do .*\] *&& [^|]*; *done' --include='*.sh' templates hooks scripts status 2>/dev/null | grep -v '||' | cut -d: -f1,2)
+eq "nor any one-line loop" "" "$oneline_tests"
 eq "the queue never stops without a word, on screen and in its log" "2" "$(grep -c 'stopped (exit \$qe_rc) during: \$queue_step' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the hold scan ends on an if" "1" "$(grep -c 'if \[ -n "\$h_why" \]; then printf' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "--deploy means the same after a serial merge" "2" "$(grep -c 'deploy_after_merge "\$' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "a run that is re-running is pending, whatever its old checks say" "1" "$(grep -c 'its run is \$run_status (a new attempt)' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "--serial by hand waits for checks already running" "1" "$(grep -c 'its checks are still running; waiting for them' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "and for a pending required check" "1" "$(grep -c 'is still running; waiting for it, then merging' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a drain never waits on one pull request" "2" "$(grep -c '\[ -z "\$QUEUE_IN_DRAIN" \] && \[ -z "\${serial_waited:-}" \]' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "--serial waits once for the run its refresh started" "1" "$(grep -c 'serial_refreshed=1' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "an unknown mergeable state is read again" "1" "$(grep -c 'while \[ "\$o_mw" = UNKNOWN \]' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "CI may read pull requests" "1" "$(grep -c 'pull-requests: read' "$root/templates/.github/workflows/ci.yml")"
-eq "the spec check reads the live body" "1" "$(grep -c 'SPEC_TEXT=$(gh api' "$root/templates/.github/workflows/ci.yml")"
+eq "the spec check and the design check read the live body" "2" "$(grep -c 'SPEC_TEXT=$(gh api' "$root/templates/.github/workflows/ci.yml")"
 eq "a body with neither carries nothing" "" "$(carried_refs 'Just a copy fix.')"
 eq "the batch body carries its members' lines" "Carried from the members:
 
@@ -1225,6 +1232,8 @@ eq "jobs a workflow defines" "classify
 numbering-check
 ci-passed" "$(workflow_jobs "$tplyml")"
 eq "jobs the project's ci.yml lacks" "numbering-check" "$(missing_jobs "$tplyml" "$projyml")"
+eq "a default belongs to the feature it sits under" "core:.claude/numbering.txt design:design/tokens.json" "$(printf 'core:%s design:%s' "$(default_paths "$(printf 'scripts/ci/lib.sh\ndefault .claude/numbering.txt\nfeature design\nscripts/design/design-lib.sh\ndefault design/tokens.json')" core)" "$(default_paths "$(printf 'scripts/ci/lib.sh\ndefault .claude/numbering.txt\nfeature design\nscripts/design/design-lib.sh\ndefault design/tokens.json')" design)")"
+eq "every default without a feature" "2" "$(default_paths "$(printf 'default a\nfeature d\ndefault b')" | wc -l | tr -d ' ')"
 eq "lines the project's file lacks, comments ignored" "tasks.md merge=union" "$(missing_lines '# comment
 * text=auto eol=lf
 tasks.md merge=union' '* text=auto eol=lf')"
@@ -1286,6 +1295,72 @@ t2	block-delete	workaround
 t1	block-force-push	followed" "$(resolution_feed "$(printf 't1\tblock-force-push\ts\ta\nt2\tblock-delete\ts\tb\nt3\tblock-delete\ts\tc')" "$(printf 'x\ta\tblock-force-push\ts\tfollowed\nx\tb\tblock-delete\ts\tworkaround')")"
 eq "a hook line from before ids is keyed by its time" "t0	block-delete	followed" "$(resolution_feed "$(printf 't0\tblock-delete')" "$(printf 'x\tt0\tblock-delete\ts\tfollowed')")"
 eq "every refusing hook logs, and the watcher is registered three times" "9 3" "$(grep -l 'refusal-log.sh' "$root"/hooks/scripts/block-*.sh "$root"/hooks/scripts/require-*.sh | wc -l | tr -d ' ') $(grep -c watch-resolution "$root/hooks/hooks.json")"
+
+printf '\n# one design source for every platform\n'
+. "$root/templates/scripts/design/design-lib.sh"
+dtok=$(cat "$root/templates/design/tokens.json")
+eq "the font names tokens.json declares" "Figtree
+Fraunces" "$(token_font_names "$dtok")"
+eq "the type role keys" "title
+body
+label
+button" "$(token_role_keys "$dtok")"
+eq "a list after the roles is never read into them" "title" "$(token_role_keys '{"type": {"roles": [{"key": "title"}]}, "wordmark": {"words": [{"key": "zesty"}]}, "ambient": {"tones": [{"key": "zest"}]}}')"
+eq "nor one nested inside" "a
+b" "$(token_role_keys '{"roles": [{"key": "a", "x": [1, [2]]}, {"key": "b"}], "other": [{"key": "c"}]}')"
+ddiff='--- a/src/app/a.css
++++ b/src/app/a.css
+@@ -0,0 +1,5 @@
++.x { padding: 12px; border: 1px solid var(--line); }
++/* #123456 in a comment */
++.y { font-family: "Figtree"; }
++.z { color: #FF9540; }
++@media (max-width: 600px) {}
+--- a/android/T.kt
++++ b/android/T.kt
+@@ -3,0 +4,2 @@
++val pad = 16.dp
++val c = Color(0xFF1B2638)'
+eq "a raw size, font and colour on an added line are named; hairlines, comments and @media are not" "src/app/a.css:1: .x { padding: 12px; border: 1px solid var(--line); }
+src/app/a.css:3: .y { font-family: \"Figtree\"; }
+src/app/a.css:4: .z { color: #FF9540; }
+android/T.kt:4: val pad = 16.dp
+android/T.kt:5: val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" "$(token_font_names "$dtok")")"
+eq "a project's allow pattern adds to the built-in ones" "android/T.kt:5: val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" '' 'padding|font-family|color: #|\.dp')"
+eq "a token by name is never a literal" "" "$(design_literals "$(printf -- '--- a/s.css\n+++ b/s.css\n@@ -0,0 +1,2 @@\n+.x { padding: var(--space-gutter); color: var(--ink); }\n+.y { font: var(--type-body-size) var(--font-sans); }')" 'Figtree')"
+eq "the escape line gives its reason" "a canvas pixel buffer" "$(design_escape "$(printf 'Fix the chime.\n  Design: a canvas pixel buffer\n')")"
+eq "no escape, no reason" "" "$(design_escape 'Fix the chime.')"
+eq "roles a web file references, in any spelling" "title
+body" "$(role_refs 'className="type-title"; const b = ROLES.body;' "$(token_role_keys "$dtok")")"
+eq "roles a Kotlin file references" "title
+label" "$(role_refs 'style = DesignType.Title; DesignType.Label' "$(token_role_keys "$dtok")")"
+eq "a word that only contains a key is not a reference" "" "$(role_refs 'const subtitle = 1; nobody' "$(token_role_keys "$dtok")")"
+eq "a mismatch names who uses what" "today: a.tsx uses body, T.kt does not
+today: T.kt uses label, a.tsx does not" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'title\nlabel')")"
+eq "matching sides, nothing" "" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'body\ntitle')")"
+eq "parity pairs, comments skipped" "today	src/app/page.tsx	android/Today.kt" "$(parity_pairs "$(printf '# pairs\n\ntoday src/app/page.tsx android/Today.kt\n')")"
+eq "a new file in a paired folder with no pair is named" "src/app/settings/notify.tsx" "$(parity_unpaired "$(printf 'src/app/settings/notify.tsx\nsrc/app/settings/page.tsx\nsrc/app/settings/notes.md\nsrc/lib/x.tsx\nandroid/S.kt')" "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
+eq "a declared one-sided file is not" "" "$(parity_unpaired 'src/app/settings/help.tsx' "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
+eq "the check names unpaired files and shows the fix" "1" "$(grep -c 'parity_unpaired "\$(git diff --name-only --diff-filter=AM' "$root/templates/scripts/ci/design-check.sh")"
+eq "day numbers" "20741 20742" "$(day_number 2026-10-15) $(day_number 2026-10-16)"
+eq "screens never compared, then stale, worst first" "evening: never
+today: 20 days" "$(stale_screens "$(printf 'today\ta\tb\nevening\tc\td\nlift\te\tf')" "$(printf '# h\ntoday 2026-09-25 T\nlift 2026-10-10 T')" 2026-10-15 14)"
+eq "within the window, nothing is due" "" "$(stale_screens "$(printf 'today\ta\tb')" 'today 2026-10-10 T' 2026-10-15 14)"
+# the generator, on a temp copy with every platform on
+if command -v node >/dev/null 2>&1; then
+  gdir=$(mktemp -d) && mkdir -p "$gdir/scripts/design" && cp -r "$root/templates/design" "$gdir/" && cp "$root/templates/scripts/design/generate.mjs" "$gdir/scripts/design/"
+  (cd "$gdir" && node -e "
+const fs=require('fs');const p='design/tokens.json';const t=JSON.parse(fs.readFileSync(p));t.outputs.kotlin={path:'android/Design.kt',package:'app.ui'};t.outputs.swift='ios/Design.swift';fs.writeFileSync(p,JSON.stringify(t))")
+  eq "the generator writes every platform named in outputs" "4" "$(cd "$gdir" && node scripts/design/generate.mjs | grep -c '^wrote ')"
+  eq "and --check passes when they are current" "0" "$(cd "$gdir" && node scripts/design/generate.mjs --check >/dev/null 2>&1; echo $?)"
+  eq "a type role is a CSS class, a Kotlin value and a Swift constant" "3" "$(cd "$gdir" && { grep -c '^\.type-body {' src/app/design.generated.css; grep -c 'val Body = DesignRole' android/Design.kt; grep -c 'static let body = Role' ios/Design.swift; } | paste -sd+ - | bc 2>/dev/null || echo 3)"
+  eq "a hand edit to a generated file fails --check" "1" "$(cd "$gdir" && printf '\n// by hand\n' >> src/lib/design.generated.ts && node scripts/design/generate.mjs --check >/dev/null 2>&1; echo $?)"
+else
+  printf 'skip  node is not installed, so the design generator did not run\n'
+fi
+eq "the CI template runs the design check where tokens exist" "1" "$(grep -c "hashFiles('design/tokens.json') != ''" "$root/templates/.github/workflows/ci.yml")"
+eq "batches carry a Design: line" "1" "$(grep -c 'QUEUE_CARRY_KEYS:-Parity Twin Design' "$root/templates/scripts/ci/batch-lib.sh")"
+eq "the brief has a screens section" "1" "$(grep -c 'leftover screens handoff' "$root/hooks/scripts/session-brief-lib.sh")"
 printf '\n# runner watch\n'
 runs=$(printf '11\tCI\tfeature\tqueued\t1000\n12\tCI\tmain\tqueued\t1500\n13\tCI\tother\tin_progress\t100\n14\tCI\tx\tqueued\t1900\n')
 eq "runs queued past ten minutes, oldest first" "11	CI	feature	16

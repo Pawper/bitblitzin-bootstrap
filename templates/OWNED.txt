@@ -25,6 +25,14 @@ scripts/ci/client-env-check.sh
 scripts/next-number.sh
 scripts/pr-open.sh
 scripts/protect-main.sh
+# Config with defaults: added when missing to a project using the feature
+# they sit under, never replaced.
+default .claude/generated-pages.txt
+default .claude/numbering.txt
+default scripts/ci/classes.txt
+default scripts/ci/setup-paths.txt
+default scripts/ci/shared-paths.txt
+default scripts/ci/task-files.txt
 feature queue
 scripts/ci/merge-queue.sh
 scripts/ci/batch-lib.sh
@@ -67,13 +75,18 @@ scripts/ci/smoke.mjs
 feature decisions
 scripts/decisions.sh
 scripts/decisions-lib.sh
+feature design
+scripts/design/design-lib.sh
+scripts/design/generate.mjs
+scripts/design/screens.sh
+scripts/ci/design-check.sh
+# The design source and its config are the project's: added once, never replaced.
+default design/tokens.json
+default design/icons.json
+default design/screens.txt
+default design/README.md
+default scripts/ci/design-ui.txt
+default scripts/ci/design-allow.txt
 feature supabase
 scripts/supabase-create.sh
 scripts/env-lib.sh
-# Config with defaults: added when missing, never replaced.
-default .claude/generated-pages.txt
-default .claude/numbering.txt
-default scripts/ci/classes.txt
-default scripts/ci/setup-paths.txt
-default scripts/ci/shared-paths.txt
-default scripts/ci/task-files.txt

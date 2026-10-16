@@ -73,9 +73,11 @@ for p in $(owned_paths "$owned"); do
   if [ "$(same_text "$(cat "$p")" "$(cat "$tpl/$p")")" = yes ]; then current=$((current + 1)); else changed="$changed $p"; fi
 done
 defaults=""
-# The config defaults belong to the core checks; a project that does not
-# use them does not need their config.
-case " $adopted " in *" core "*) [ -n "$only" ] || for p in $(default_paths "$owned"); do [ -f "$p" ] || defaults="$defaults $p"; done ;; esac
+# A feature's config defaults go to a project that uses the feature; one
+# that does not use it does not need its config.
+if [ -z "$only" ]; then
+  for af in $adopted; do for p in $(default_paths "$owned" "$af"); do [ -f "$p" ] || defaults="$defaults $p"; done; done
+fi
 
 echo "Plugin $version. Plugin-owned files here: $current current, $(printf '%s' "$changed" | wc -w | tr -d ' ') older or edited, $(printf '%s' "$missing" | wc -w | tr -d ' ') missing."
 edited=""

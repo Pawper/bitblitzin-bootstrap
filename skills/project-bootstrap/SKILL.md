@@ -149,6 +149,18 @@ mechanical check: "report what was not done" and "stop every shell." Say so in C
 - The Supabase project is one approved command, `sh scripts/supabase-create.sh NAME`, which writes the password
   only to `.env`; it belongs on the launch to-do, not in a by-hand step.
 
+## 4b. One design source for every platform
+
+A project with a web app and a phone app (web + Android, web + iOS) starts with `design/tokens.json` and `design/icons.json` as the one source of its look, and `node scripts/design/generate.mjs` writing each platform's tables from them: a TypeScript module, a CSS file with one class per type role, a Kotlin object, a Swift enum. Set `outputs` in `tokens.json` to the platforms the project has. One project built this by hand after its second screen drifted; it is a bootstrap output so the next one does not.
+
+Three rules go with it, and CI holds them (`scripts/ci/design-check.sh`, in the `checks` job wherever `design/tokens.json` exists):
+
+1. **A screen uses a token or a role, never a literal.** A pull request that adds a raw hex colour, a px/dp/sp size or a font name to a UI file fails, unless its body says why: `Design: <reason>`. The generated files and `design/` are exempt; `scripts/ci/design-ui.txt` lists the UI globs and `scripts/ci/design-allow.txt` the lines to let through.
+2. **Type roles are the unit, not sizes.** `rowClaim: sans 15/1.3 600` is one line both platforms follow; a screen names the role. A decision such as "card text reads in the body sans" is one line in `tokens.json`.
+3. **A colour chosen by data is a core rule; a colour chosen by design is a token.** A mood's colour, a state's tone, anything picked by what the data says lives in the shared core with fixtures; the tokens supply the palette it picks from.
+
+Where `scripts/ci/parity.txt` lists screen pairs, the check also fails a pull request whose pair names different type roles on its two sides, and `design/screens.txt` records when a person last compared each pair by eye; the session brief names the pairs never compared or older than 14 days (`sh scripts/design/screens.sh compare NAME` records one).
+
 ## 5. The project board, exactly
 
 Create one GitHub project for the repository and set it up so nothing has to be updated by hand:
