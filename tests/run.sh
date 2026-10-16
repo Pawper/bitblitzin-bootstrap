@@ -1321,12 +1321,14 @@ ddiff='--- a/src/app/a.css
 @@ -3,0 +4,2 @@
 +val pad = 16.dp
 +val c = Color(0xFF1B2638)'
-eq "a raw size, font and colour on an added line are named; hairlines, comments and @media are not" "src/app/a.css:1: .x { padding: 12px; border: 1px solid var(--line); }
-src/app/a.css:3: .y { font-family: \"Figtree\"; }
-src/app/a.css:4: .z { color: #FF9540; }
-android/T.kt:4: val pad = 16.dp
-android/T.kt:5: val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" "$(token_font_names "$dtok")")"
-eq "a project's allow pattern adds to the built-in ones" "android/T.kt:5: val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" '' 'padding|font-family|color: #|\.dp')"
+eq "a raw size, font and colour on an added line are named; hairlines, comments and @media are not" "src/app/a.css:1: [12px] .x { padding: 12px; border: 1px solid var(--line); }
+src/app/a.css:3: [Figtree] .y { font-family: \"Figtree\"; }
+src/app/a.css:4: [#FF9540] .z { color: #FF9540; }
+android/T.kt:4: [16.dp] val pad = 16.dp
+android/T.kt:5: [0xFF1B2638] val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" "$(token_font_names "$dtok")")"
+eq "a long line names the literal found, not the template beside it" 'android/G.kt:9: [40.dp] Text("${pct(v)}%", modifier = Modifier.widthIn(min = 40.dp))' "$(design_literals "$(printf -- '--- a/android/G.kt\n+++ b/android/G.kt\n@@ -8,0 +9,2 @@\n+Text("${pct(v)}%%", modifier = Modifier.widthIn(min = 40.dp))\n+Text("${w}px wide, {speed}x")')" '')"
+eq "a line with several literals names each" 'src/a.css:1: [#ABC, 12px, 8px] .x { margin: 12px 8px; color: #ABC }' "$(design_literals "$(printf -- '--- a/src/a.css\n+++ b/src/a.css\n@@ -0,0 +1 @@\n+.x { margin: 12px 8px; color: #ABC }')" '')"
+eq "a project's allow pattern adds to the built-in ones" "android/T.kt:5: [0xFF1B2638] val c = Color(0xFF1B2638)" "$(design_literals "$ddiff" '' 'padding|font-family|color: #|\.dp')"
 eq "a token by name is never a literal" "" "$(design_literals "$(printf -- '--- a/s.css\n+++ b/s.css\n@@ -0,0 +1,2 @@\n+.x { padding: var(--space-gutter); color: var(--ink); }\n+.y { font: var(--type-body-size) var(--font-sans); }')" 'Figtree')"
 eq "the escape line gives its reason" "a canvas pixel buffer" "$(design_escape "$(printf 'Fix the chime.\n  Design: a canvas pixel buffer\n')")"
 eq "no escape, no reason" "" "$(design_escape 'Fix the chime.')"

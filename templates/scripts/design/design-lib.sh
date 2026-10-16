@@ -29,9 +29,11 @@ token_role_keys() {
 # Print each added line that carries a raw hex colour (#abc, #aabbcc,
 # 0xFFaabbcc), a px, dp or sp number for type or spacing (0, 0.5 and 1
 # are hairlines and pass), or a font name from FONT_NAMES (one per line),
-# as "path:line: text". Lines matching ALLOW_RE (a regex, default: comment
-# lines and @media) are skipped. Every drift one project fixed was a
-# literal on one side; a screen says a token or a role by name.
+# as "path:line: [the literals found] text", so a long line is never
+# blamed on the wrong part (a "${pct}%" template beside a 40.dp). Lines
+# matching ALLOW_RE (a regex, default: comment lines and @media) are
+# skipped. Every drift one project fixed was a literal on one side; a
+# screen says a token or a role by name.
 design_literals() {
   dl_fonts=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | sed 's/[][\.*^$]/\\&/g' | paste -sd'|' -)
   # awk -v strips one backslash, so the pattern carries two
@@ -43,18 +45,25 @@ design_literals() {
     /^\+/ {
       t = substr($0, 2); cur = line; line++
       if (t ~ allow) next
-      hit = 0
-      if (t ~ /#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]([0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])?([0-9a-fA-F][0-9a-fA-F])?([^0-9a-zA-Z_-]|$)/) hit = 1
-      if (t ~ /0[xX][fF][fF][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]/) hit = 1
+      hit = ""
       s = t
-      while (match(s, /[0-9]+(\.[0-9]+)?\.?(px|dp|sp)([^a-zA-Z0-9_]|$)/)) {
-        m = substr(s, RSTART, RLENGTH); num = m; sub(/\.?(px|dp|sp).*/, "", num)
-        before = (RSTART > 1) ? substr(s, RSTART - 1, 1) : " "
-        if (before !~ /[a-zA-Z0-9_.-]/ && num + 0 != 0 && num + 0 != 0.5 && num + 0 != 1) hit = 1
+      while (match(s, /#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]([0-9a-fA-F][0-9a-fA-F][0-9a-fA-F])?([0-9a-fA-F][0-9a-fA-F])?([^0-9a-zA-Z_-]|$)/)) {
+        m = substr(s, RSTART, RLENGTH); sub(/[^0-9a-fA-F#]$/, "", m); hit = hit ", " m
         s = substr(s, RSTART + RLENGTH)
       }
-      if (fonts != "" && t ~ ("[\"\x27](" fonts ")[\"\x27]")) hit = 1
-      if (hit) printf "%s:%d: %s\n", f, cur, t
+      s = t
+      while (match(s, /0[xX][fF][fF][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]/)) {
+        hit = hit ", " substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+      }
+      s = t
+      while (match(s, /[0-9]+(\.[0-9]+)?\.?(px|dp|sp)([^a-zA-Z0-9_]|$)/)) {
+        m = substr(s, RSTART, RLENGTH); sub(/[^a-z0-9.]$/, "", m); num = m; sub(/\.?(px|dp|sp).*/, "", num)
+        before = (RSTART > 1) ? substr(s, RSTART - 1, 1) : " "
+        if (before !~ /[a-zA-Z0-9_.-]/ && num + 0 != 0 && num + 0 != 0.5 && num + 0 != 1) hit = hit ", " m
+        s = substr(s, RSTART + RLENGTH)
+      }
+      if (fonts != "" && match(t, "[\"\x27](" fonts ")[\"\x27]")) hit = hit ", " substr(t, RSTART + 1, RLENGTH - 2)
+      if (hit != "") printf "%s:%d: [%s] %s\n", f, cur, substr(hit, 3), t
     }'
 }
 
