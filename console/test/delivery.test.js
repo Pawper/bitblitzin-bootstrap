@@ -150,6 +150,8 @@ test('a runner names its job: the PR, or main with its workflow', () => {
     [{ number: 12, head: 'feat' }],
   );
   assert.deepEqual(r.lanes.map((l) => l.job && [l.job.pr, l.job.name, l.job.workflow]), [[12, 'checks', 'CI'], [null, 'deploy', 'Deploy'], null]);
+  const q = d.runnerLanes([{ name: 'r1', status: 'online', busy: true }], [{ status: 'queued', runner_name: 'r1', name: 'kotlin', workflow_name: 'CI', head_branch: 'feat' }], [{ number: 595, head: 'feat' }]);
+  assert.deepEqual([q.lanes[0].job.pr, q.lanes[0].job.name, q.waiting.length], [595, 'kotlin', 0], 'a queued job that names its runner is taken, not waiting');
   assert.equal(r.lanes[2].status, 'busy', 'busy with no job seen is still busy');
   assert.deepEqual(r.waiting.map((w) => [w.branch, w.workflow, w.name]), [['main', 'Queue drain', 'drain']]);
 });

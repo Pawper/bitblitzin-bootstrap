@@ -80,5 +80,19 @@ $b
   fi
 fi
 
+# 4. a file under a screen folder that no pair lists
+if [ -f scripts/ci/parity.txt ]; then
+  # shellcheck disable=SC2086
+  unp=$(parity_unpaired "$(git diff --name-only --diff-filter=AM $diff_args 2>/dev/null)" "$(cat scripts/ci/parity.txt)")
+  if [ -n "$unp" ]; then
+    echo "These files sit in a folder that scripts/ci/parity.txt pairs across platforms, but are in no pair themselves:" >&2
+    printf '%s\n' "$unp" | sed 's/^/  /' >&2
+    echo "Add each to a pair (NAME PATH_A PATH_B), or declare it one-sided with a line \"unpaired PATH\" in parity.txt." >&2
+    if [ -n "$(design_escape "${SPEC_TEXT:-${PR_TEXT:-}}")" ] || printf '%s\n' "${SPEC_TEXT:-${PR_TEXT:-}}" | grep -qiE '^[[:space:]]*parity:'; then
+      echo "  (allowed by the pull request's Design: or Parity: line)"
+    else fail=1; fi
+  fi
+fi
+
 [ "$fail" -eq 0 ] && echo "Design check passed."
 exit $fail

@@ -124,3 +124,24 @@ stale_screens() {
     fi
   done | sort -t"$(printf '\t')" -k1,1nr | cut -f2
 }
+
+# parity_unpaired PATHS PARITY_TXT
+# PATHS are changed files, one per line. Print each that sits in a folder
+# some pair's path sits in, has the same extension as that pair's path,
+# and is itself in no pair, unless a line "unpaired PATH" in PARITY_TXT
+# declares it one-sided. Pairs drift as a project grows: four Settings
+# blocks added in a week were never paired, and every Android Settings
+# edit then failed parity until someone noticed.
+parity_unpaired() {
+  pu_pairs=$(parity_pairs "$2")
+  pu_known=$(printf '%s\n' "$pu_pairs" | awk -F'\t' '{ print $2; print $3 }')
+  pu_exempt=$(printf '%s\n' "$2" | tr -d '\r' | awk '$1 == "unpaired" && NF >= 2 { print $2 }')
+  pu_dirs=$(printf '%s\n' "$pu_known" | awk '{ d = $0; e = $0; sub(/\/[^\/]*$/, "", d); sub(/.*\./, "", e); print d "\t" e }' | sort -u)
+  printf '%s\n' "$1" | tr -d '\r' | sed '/^[[:space:]]*$/d' | while IFS= read -r pu_p; do
+    printf '%s\n' "$pu_known" | grep -qxF "$pu_p" && continue
+    printf '%s\n' "$pu_exempt" | grep -qxF "$pu_p" && continue
+    pu_d=${pu_p%/*}; pu_e=${pu_p##*.}
+    [ "$pu_d" != "$pu_p" ] || continue
+    if printf '%s\n' "$pu_dirs" | grep -qxF "$pu_d	$pu_e"; then printf '%s\n' "$pu_p"; fi
+  done
+}

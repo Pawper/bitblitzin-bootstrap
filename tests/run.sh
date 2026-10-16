@@ -895,6 +895,8 @@ oneline_tests=$(cd "$root" && grep -rnE 'do .*\] *&& [^|]*; *done' --include='*.
 eq "nor any one-line loop" "" "$oneline_tests"
 eq "the queue never stops without a word, on screen and in its log" "2" "$(grep -c 'stopped (exit \$qe_rc) during: \$queue_step' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the hold scan ends on an if" "1" "$(grep -c 'if \[ -n "\$h_why" \]; then printf' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "--deploy means the same after a serial merge" "2" "$(grep -c 'deploy_after_merge "\$' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "a run that is re-running is pending, whatever its old checks say" "1" "$(grep -c 'its run is \$run_status (a new attempt)' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "--serial by hand waits for checks already running" "1" "$(grep -c 'its checks are still running; waiting for them' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "and for a pending required check" "1" "$(grep -c 'is still running; waiting for it, then merging' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a drain never waits on one pull request" "2" "$(grep -c '\[ -z "\$QUEUE_IN_DRAIN" \] && \[ -z "\${serial_waited:-}" \]' "$root/templates/scripts/ci/merge-queue.sh")"
@@ -1337,6 +1339,9 @@ eq "a mismatch names who uses what" "today: a.tsx uses body, T.kt does not
 today: T.kt uses label, a.tsx does not" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'title\nlabel')")"
 eq "matching sides, nothing" "" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'body\ntitle')")"
 eq "parity pairs, comments skipped" "today	src/app/page.tsx	android/Today.kt" "$(parity_pairs "$(printf '# pairs\n\ntoday src/app/page.tsx android/Today.kt\n')")"
+eq "a new file in a paired folder with no pair is named" "src/app/settings/notify.tsx" "$(parity_unpaired "$(printf 'src/app/settings/notify.tsx\nsrc/app/settings/page.tsx\nsrc/app/settings/notes.md\nsrc/lib/x.tsx\nandroid/S.kt')" "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
+eq "a declared one-sided file is not" "" "$(parity_unpaired 'src/app/settings/help.tsx' "$(printf 'settings src/app/settings/page.tsx android/S.kt\nunpaired src/app/settings/help.tsx')")"
+eq "the check names unpaired files and shows the fix" "1" "$(grep -c 'parity_unpaired "\$(git diff --name-only --diff-filter=AM' "$root/templates/scripts/ci/design-check.sh")"
 eq "day numbers" "20741 20742" "$(day_number 2026-10-15) $(day_number 2026-10-16)"
 eq "screens never compared, then stale, worst first" "evening: never
 today: 20 days" "$(stale_screens "$(printf 'today\ta\tb\nevening\tc\td\nlift\te\tf')" "$(printf '# h\ntoday 2026-09-25 T\nlift 2026-10-10 T')" 2026-10-15 14)"

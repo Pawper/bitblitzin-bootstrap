@@ -548,10 +548,16 @@ serial_one() {
   fi
   if [ "$(pr_rollup "$head")" != green ]; then
     run=$(latest_run "$hb"); run_id=${run%%	*}
+    run_status=$(printf '%s' "$run" | cut -f2)
     rate_stop
     why="not green yet, nothing merged"
     code=2
-    if [ -n "$run_id" ]; then
+    if [ -n "$run_id" ] && [ "$run_status" != completed ] && [ -n "$run_status" ]; then
+      # Re-run (gh run rerun --failed): the old attempt's red checks still
+      # show on the commit for a few seconds while the new attempt starts.
+      # A run that is not completed is pending, whatever its old checks say.
+      code=2; msg="its run is $run_status (a new attempt)"
+    elif [ -n "$run_id" ]; then
       code=0; msg=$(diagnose "$run_id") || code=$?
       case $code in
         1) record_flaky "$pr" "$run_id" failed; why="$msg" ;;
@@ -843,26 +849,7 @@ if [ "$mode" = drain ]; then
     fi
   done
   say "queue done"
-  # --deploy: when the drain moved main and the project deploys on a
-  # schedule, start the Deploy workflow now rather than at the next hour.
-  # The guard path deploys from Git by itself.
-  if [ -n "$then_deploy" ]; then
-    d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
-    if [ "$d_end" = "$d_begin" ]; then say "Nothing merged, so nothing to deploy."
-    elif [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
-      gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what the drain merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
-    else say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."; fi
-    # Release channels (store uploads, test distributions) follow Deploy:
-    # they start on workflow_run of Deploy, once per drain. Where no Deploy
-    # run starts them, the ones listed under "releases" in
-    # .claude/deploy.json are started here, once.
-    if [ "$d_end" != "$d_begin" ] && ! grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
-      for rw_f in $(release_workflows "$(cat .claude/deploy.json 2>/dev/null)"); do
-        gh api -X POST "repos/{owner}/{repo}/actions/workflows/$rw_f/dispatches" -f ref="$base" >/dev/null 2>&1 \
-          && say "Started the release workflow $rw_f for what the drain merged." || say "Could not start $rw_f; run it from the Actions tab."
-      done
-    fi
-  fi
+  if [ -n "$then_deploy" ]; then deploy_after_merge "$d_begin"; fi
   # Re-read each one before calling it a failure: a pull request red
   # earlier in the drain may be green, or only cancelled, by now.
   still=""
@@ -905,6 +892,27 @@ notify_conflict() {
   say "  #$1: commented with the conflicting files and labeled it state:blocked."
 }
 
+# deploy_after_merge BEGIN_SHA: --deploy, the same in every mode. When main
+# moved since BEGIN_SHA and the project deploys on a schedule, start the
+# Deploy workflow now rather than at the next hour; the guard path deploys
+# from Git by itself. Release channels (store uploads, test distributions)
+# follow Deploy; where no Deploy run starts them, the ones listed under
+# "releases" in .claude/deploy.json are started here, once. A --serial
+# run once ended "queue done" with no deploy started: only the drain did this.
+deploy_after_merge() {
+  d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
+  if [ "$d_end" = "$1" ]; then say "Nothing merged, so nothing to deploy."; return 0; fi
+  if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
+    gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
+    return 0
+  fi
+  say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."
+  for rw_f in $(release_workflows "$(cat .claude/deploy.json 2>/dev/null)"); do
+    gh api -X POST "repos/{owner}/{repo}/actions/workflows/$rw_f/dispatches" -f ref="$base" >/dev/null 2>&1 \
+      && say "Started the release workflow $rw_f for what was merged." || say "Could not start $rw_f; run it from the Actions tab."
+  done
+}
+
 # ready_others EXCLUDE: the open pull requests aimed at the base, not
 # drafts, green and not conflicting with main, other than EXCLUDE.
 ready_others() {
@@ -927,7 +935,9 @@ if [ "$mode" = serial ]; then
     if [ -n "$why" ]; then say "Refused --serial: $why"; exit 2; fi
   fi
   [ -n "$because" ] || { [ -n "$QUEUE_IN_DRAIN" ] && because=drain; }
+  s_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   for pr in $prs; do serial_one "$pr"; done
+  if [ -n "$then_deploy" ] && [ -z "$QUEUE_IN_DRAIN" ]; then deploy_after_merge "$s_begin"; fi
   [ -n "$QUEUE_IN_DRAIN" ] || echo "queue done"
   exit 0
 fi

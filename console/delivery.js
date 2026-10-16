@@ -218,7 +218,9 @@ function runnerLanes(runners, jobs, open) {
   // A job a runner has taken: anything not finished that names the runner.
   // Matching only "in_progress" missed a pull request's checks job in the
   // moment between being assigned and starting, and the lane said "busy".
-  const taken = (jobs || []).filter((j) => j.status !== 'completed' && j.status !== 'queued' && j.runner_name);
+  // A job still listed as queued but already naming its runner is taken:
+  // GitHub flags the runner busy before the job's status moves on.
+  const taken = (jobs || []).filter((j) => j.status !== 'completed' && j.runner_name);
   const describe = (j) => ({
     name: j.name,
     workflow: j.workflow_name || null,
@@ -239,7 +241,7 @@ function runnerLanes(runners, jobs, open) {
   // its run is left to do.
   const summary = process.env.QUEUE_SUMMARY_CHECK || 'CI passed';
   const pendingIn = (runId, self) => (jobs || []).some((x) => x !== self && x.run_id === runId && x.status !== 'completed');
-  const waiting = (jobs || []).filter((j) => j.status === 'queued')
+  const waiting = (jobs || []).filter((j) => j.status === 'queued' && !j.runner_name)
     .filter((j) => j.name !== summary || !pendingIn(j.run_id, j))
     .map(describe);
   return { lanes, waiting, queued: waiting.length };

@@ -29,6 +29,8 @@ The generator is the plugin's file and the sync keeps it current. A project's ow
 
 When `scripts/ci/parity.txt` lists screen pairs (`NAME PATH_A PATH_B`), the design check also compares, per pair a pull request touches, the token and role names each side references, and fails when one side uses a role the other does not. That catches the drift a file-pair check cannot: both sides changed, and one stopped matching. The check reads the role names a screen says directly (`type-rowClaim`, `DesignType.RowClaim`); a web screen that reaches a role through its own class in a stylesheet does not count as naming it, which is one more reason a screen says the role.
 
+Pairs drift as a project grows: a new screen file lands in a folder whose others are paired, and nobody lists it until the other platform's edits start failing. The check also fails a pull request that adds or changes a file in a folder some pair lists, with the same extension, that is in no pair itself; a line `unpaired PATH` in `parity.txt` declares a file one-sided on purpose.
+
 A file-pair check never catches a screen that simply looks different. `screens.txt` records, per pair, the day a person last compared the two platforms by eye; the session brief names the pairs never compared or not compared in 14 days. After comparing, record it:
 
 ```bash
