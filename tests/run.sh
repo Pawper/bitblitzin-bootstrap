@@ -667,6 +667,15 @@ _No response_')"
 eq "CRLF body" "state:parked" "$(state_label_from_body "$(printf '### State\r\n\r\nparked\r\n')")"
 
 printf '\n# spec_check_reason\n'
+eq "a configured root counts as source" "missing" "$(spec_check_reason 'android/app/Main.kt' '' "$(printf 'src/\nandroid/')")"
+eq "a root without its slash still counts" "missing" "$(spec_check_reason 'android/app/Main.kt' '' 'android')"
+eq "outside every root is not source" "" "$(spec_check_reason 'docs/a.md' '' "$(printf 'src/\nandroid/')")"
+eq "the default root is src" "missing" "$(spec_check_reason 'src/a.ts' '')"
+eq "the queue names the build when the project has one" "1" "$(grep -c 'build \$d_build' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "both Deploy paths pass the build id" "2" "$(grep -c 'scripts/ci/build-id.sh HEAD' "$root/templates/.github/workflows/deploy.yml")"
+eq "QUEUE.md no longer names --deploy as a flag to pass" "0" "$(grep -c '(`--deploy`, or\|`--deploy` starts' "$root/templates/scripts/ci/QUEUE.md")"
+eq "the sync can stage without committing, and leaves project-owned files alone" "2" "$(grep -c 'no_commit=yes\|project-owned.txt; never compared' "$root/scripts/sync/sync-templates.sh")"
+
 eq "src with its spec is fine" "" "$(spec_check_reason 'src/auth.ts
 specs/sign-in/spec.md')"
 eq "src without a spec is missing" "missing" "$(spec_check_reason 'src/auth.ts

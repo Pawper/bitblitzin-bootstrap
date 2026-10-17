@@ -938,7 +938,10 @@ deploy_if_due() {
   # The gate: no other green pull request waiting, and the interval passed.
   if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then say "$gate"; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
   if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
-    gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
+    # A project that shows a build id (scripts/ci/build-id.sh) gets it named
+    # here, so the line matches what Settings will show.
+    d_build=""; if [ -f scripts/ci/build-id.sh ]; then d_build=$(sh scripts/ci/build-id.sh "$d_end" 2>/dev/null | head -n 1); fi
+    gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged${d_build:+, build $d_build}." || say "Could not start the Deploy workflow; run it from the Actions tab."
     return 0
   fi
   say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."

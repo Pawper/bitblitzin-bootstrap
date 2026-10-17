@@ -92,7 +92,7 @@ DS_FILE="$app/vercel.json" DS_PATH="$path" DS_CMD="sh ${rel}scripts/ci/vercel-ig
 never=""
 for w in ${DEPLOY_NEVER_SHIPS:-}; do never="$never${never:+, }\"$w\""; done
 mkdir -p .claude
-printf '{\n  "_comment": "How this project deploys, written by scripts/deploy-setup.sh. path: runner, vercel or guard. neverShips: the app'"'"'s own folders that never ship, besides the homes the plugin knows. The Deploy workflow, the Vercel ignore step, the brief and the audit read it.",\n  "path": "%s",\n  "appRoot": "%s",\n  "intervalMinutes": %s,\n  "neverShips": [%s]\n}\n' "$path" "$app" "$interval" "$never" > .claude/deploy.json
+printf '{\n  "_comment": "How this project deploys, written by scripts/deploy-setup.sh. path: runner, vercel or guard. neverShips: the app'"'"'s own folders that never ship, besides the homes the plugin knows. The Deploy workflow, the Vercel ignore step, the brief and the audit read it. intervalMinutes 0: deploy after every landing unless another pull request is green.",\n  "path": "%s",\n  "appRoot": "%s",\n  "intervalMinutes": %s,\n  "neverShips": [%s]\n}\n' "$path" "$app" "$interval" "$never" > .claude/deploy.json
 echo "Wrote $app/vercel.json and .claude/deploy.json."
 
 if [ "$path" = guard ]; then

@@ -74,6 +74,12 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.QUEUE_TOKEN || github.token }}
+      - name: Say so when a rebuild may not run here
+        if: steps.recent.outputs.skip != 'yes' && runner.environment == 'github-hosted'
+        run: |
+          if grep -qs '^[[:space:]]*rebuild:' scripts/ci/generated-paths.txt; then
+            echo "::warning title=The rebuild runs on a hosted runner::scripts/ci/generated-paths.txt names a rebuild, and this drain runs on a hosted $RUNNER_OS runner. If the rebuild needs your machine (a JDK, Windows), set the repository variable QUEUE_RUNS_ON to that runner's label."
+          fi
       - name: Drain the queue
         if: steps.recent.outputs.skip != 'yes'
         env:

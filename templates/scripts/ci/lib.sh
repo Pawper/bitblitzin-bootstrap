@@ -156,9 +156,10 @@ state_label_from_body() {
   '
 }
 
-# spec_check_reason PATHS [TEXT]
+# spec_check_reason PATHS [TEXT] [ROOTS]
 # PATHS is one changed path per line; TEXT is the pull request's title and
-# body. A source change must belong to a spec: either TEXT names one
+# body; ROOTS is the source roots, one folder per line (default "src/";
+# scripts/ci/spec-roots.txt lists a project's own, such as android/). A source change must belong to a spec: either TEXT names one
 # ("Spec: specs/<feature>" or any "specs/<feature>/" mention) or the change
 # touches a feature folder under specs/. The spec is written before
 # building, so naming it is the normal case; touching it is for a change
@@ -170,8 +171,10 @@ state_label_from_body() {
 # nothing when the change is fine or touches no source.
 spec_check_reason() {
   sc_src=0
-  sc_folders=$(printf '%s\n' "$1" | tr -d '\r' | tr '\\' '/' | awk '
-    /^src\// { src = 1 }
+  sc_roots=$(printf '%s\n' "${3:-src/}" | tr -d '\r' | sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d; s#/*$#/#' | paste -sd'|' -)
+  sc_folders=$(printf '%s\n' "$1" | tr -d '\r' | tr '\\' '/' | awk -v roots="${sc_roots:-src/}" '
+    BEGIN { nr = split(roots, r, "|") }
+    { for (i = 1; i <= nr; i++) if (index($0, r[i]) == 1) src = 1 }
     /^specs\/[^\/]+\// { f = $0; sub(/^specs\//, "", f); sub(/\/.*/, "", f); folders[f] = 1 }
     END {
       n = 0
