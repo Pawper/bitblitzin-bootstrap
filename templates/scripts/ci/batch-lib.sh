@@ -339,8 +339,9 @@ serial_bursts() {
 # main, instead of "updated" round after round.
 conflict_line() {
   cl=$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | head -n 5 | tr '\n' ' ' | sed 's/ $//')
-  if [ -n "$cl" ]; then echo "conflicts with main in $cl; resolve it on the branch, then queue it again"
-  else echo "conflicts with main; resolve it on the branch, then queue it again"; fi
+  cl_gen=""; [ "$2" = generated ] && cl_gen="; generated only: a rebuild on the batch would resolve this"
+  if [ -n "$cl" ]; then echo "conflicts with main in $cl$cl_gen; resolve it on the branch, then queue it again"
+  else echo "conflicts with main$cl_gen; resolve it on the branch, then queue it again"; fi
 }
 
 # batch_members BODY
@@ -420,6 +421,7 @@ conflict_notice() {
   if [ "$2" = main ]; then cn_with="main"; else cn_with="#$2, which goes into this batch first"; fi
   printf 'The merge queue could not take this pull request: it conflicts with %s' "$cn_with"
   if [ -n "$cn_files" ]; then printf ' in:\n\n%s\n\n' "$cn_files"; else printf '.\n\n'; fi
+  if [ "$3" = generated ]; then printf 'Every file here is generated build output (scripts/ci/generated-paths.txt): a rebuild on the batch would resolve this, and the queue does that itself when the list names a rebuild: command.\n\n'; fi
   printf 'To resolve it: in this branch'"'"'s worktree, merge main in (`git fetch origin && git merge origin/main`), fix the files, run their tests, and push. Never rebase or force-push. The queue takes it again once it is green. It is labeled state:blocked until then.\n'
 }
 
@@ -500,4 +502,31 @@ deploy_state() {
 # these trees as well as the lockfile.
 file_deps() {
   printf '%s\n' "$1" | tr -d '\r' | tr ',{}' '\n\n\n' | sed -n 's/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*"file:\([^"]*\)".*/\1/p'
+}
+
+# generated_globs TEXT / rebuild_command TEXT
+# TEXT is scripts/ci/generated-paths.txt: one shell glob per line naming
+# checked-in build output, and one line "rebuild: COMMAND". Print the globs,
+# or the command.
+generated_globs() { printf '%s\n' "$1" | tr -d '\r' | sed 's/#.*//; /^[[:space:]]*rebuild:/d; s/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d'; }
+rebuild_command() { printf '%s\n' "$1" | tr -d '\r' | sed -n 's/^[[:space:]]*rebuild:[[:space:]]*//p' | sed 's/[[:space:]]*$//' | head -n 1; }
+
+# generated_only FILES TEXT
+# "yes" when FILES (one path per line, at least one) all match a glob of
+# TEXT'\''s generated paths; "no" otherwise, and when the list is empty.
+# Two pull requests that each commit their own rebuild of a shared package
+# conflict on it even when their sources do not; the queue takes either
+# side and rebuilds instead of dropping one.
+generated_only() {
+  go_globs=$(generated_globs "$2")
+  if [ -z "$go_globs" ]; then echo no; return 0; fi
+  set -f
+  go_any=no; go_all=yes
+  for go_f in $(printf '%s\n' "$1" | tr -d '\r' | tr '\\' '/' | sed '/^[[:space:]]*$/d'); do
+    go_any=yes; go_hit=no
+    for go_pat in $go_globs; do case "$go_f" in $go_pat) go_hit=yes; break ;; esac; done
+    if [ "$go_hit" = no ]; then go_all=no; fi
+  done
+  set +f
+  if [ "$go_any" = yes ] && [ "$go_all" = yes ]; then echo yes; else echo no; fi
 }

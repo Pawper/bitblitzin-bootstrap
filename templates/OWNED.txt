@@ -43,6 +43,7 @@ scripts/ci/run-lib.sh
 scripts/ci/run-test-file.mjs
 scripts/ci/QUEUE.md
 scripts/ci/deploy-gate.sh
+default scripts/ci/generated-paths.txt
 scripts/pr-checks.sh
 scripts/worktrees-lib.sh
 scripts/worktrees.sh

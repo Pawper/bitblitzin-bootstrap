@@ -1087,6 +1087,20 @@ eq "the real invocation beside the prose still counts" "3" "$(batch_merge_reason
 eq "a quoted gh pr merge is prose" "" "$(direct_merge_reason "printf 'never run gh pr merge 12' >> notes.md")"
 eq "the pull request template shows both parity forms" "2" "$(grep -c '^Parity: ' "$root/templates/.github/pull_request_template.md")"
 eq "CI diffs a pull request from current main, the merge ref's first parent" "1 1" "$(grep -c "BASE: \${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}" "$root/templates/.github/workflows/ci.yml") $(grep -c 'base=$(git rev-parse "$head^1")' "$root/templates/scripts/ci/design-check.sh")"
+gen_cfg_t='# built output
+packages/core/*
+rebuild: ./gradlew :core:jsPackage
+'
+eq "the generated globs" "packages/core/*" "$(generated_globs "$gen_cfg_t")"
+eq "the rebuild command" "./gradlew :core:jsPackage" "$(rebuild_command "$gen_cfg_t")"
+eq "a conflict only in generated files" "yes" "$(generated_only "$(printf 'packages/core/index.js\npackages/core/types.d.ts')" "$gen_cfg_t")"
+eq "a conflict that reaches source is not" "no" "$(generated_only "$(printf 'packages/core/index.js\nandroid/core/src/Core.kt')" "$gen_cfg_t")"
+eq "no list, never generated-only" "no" "$(generated_only 'packages/core/index.js' '# nothing listed')"
+eq "no files, not generated-only" "no" "$(generated_only '' "$gen_cfg_t")"
+eq "the drop line says when a rebuild would have done" "conflicts with main in packages/core/index.js; generated only: a rebuild on the batch would resolve this; resolve it on the branch, then queue it again" "$(conflict_line 'packages/core/index.js' generated)"
+eq "the conflict comment too" "1" "$(conflict_notice 'packages/core/index.js' main generated | grep -c 'generated build output')"
+eq "a plain conflict comment says nothing of it" "0" "$(conflict_notice 'src/a.ts' main | grep -c 'generated build output')"
+eq "the batch takes either side of generated files and rebuilds" "1 1" "$(grep -c 'merge -q --no-ff --no-edit -X theirs' "$root/templates/scripts/ci/merge-queue.sh") $(grep -c 'rb=$(rebuild_command "$gen_cfg")' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a lock whose process is gone is free" "" "$(queue_lock_reason "4242	1000	--drain" 1720 no)"
 eq "a lock older than three hours is free" "" "$(queue_lock_reason "4242	1000	--batch" 20000 yes)"
 eq "no lock is free" "" "$(queue_lock_reason '' 1720 yes)"

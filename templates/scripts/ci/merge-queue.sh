@@ -144,6 +144,10 @@ tab=$(printf '\t')
 # annotations of a job that is stuck, one for our runners. Bounded waits.
 wait_minutes=${QUEUE_WAIT_MINUTES:-60}
 flaky_dir=.scratch/queue
+# Checked-in build output and the command that rebuilds it (see
+# scripts/ci/generated-paths.txt): conflicts in these files alone are
+# resolved on the batch, not dropped.
+gen_cfg=$(cat scripts/ci/generated-paths.txt 2>/dev/null || true)
 mkdir -p "$flaky_dir" 2>/dev/null || true
 
 # Staying inside GitHub's API limits. There are two. The hourly quota
@@ -913,7 +917,7 @@ notify_conflict() {
   nc_sha=$(pr_field "$1" 2)
   nc_seen="$flaky_dir/noticed"
   grep -qx "$1 $nc_sha" "$nc_seen" 2>/dev/null && return 0
-  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$(conflict_notice "$2" "$3")" >/dev/null 2>&1 || return 0
+  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$(conflict_notice "$2" "$3" "${4:-}")" >/dev/null 2>&1 || return 0
   nc_cur=$(gh api "repos/{owner}/{repo}/issues/$1/labels" --jq '.[].name' 2>/dev/null || true)
   state_labels_json "$nc_cur" "state:blocked" | gh api -X PUT "repos/{owner}/{repo}/issues/$1/labels" --input - >/dev/null 2>&1 || true
   echo "$1 $nc_sha" >> "$nc_seen"
@@ -1105,8 +1109,12 @@ printf 'checking %s\n' "$(printf '%s ' $prs | sed 's/ $//')" > "$flaky_dir/now" 
 pairs=""
 for a in $prs; do for b in $prs; do
   [ "$a" -lt "$b" ] || continue
-  git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1 || pairs="$pairs
-$a $b"
+  if ! git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1; then
+    # a pair that clashes only in generated files is resolved on the batch
+    pf=$(git -C "$wt" merge-tree --write-tree --name-only "refs/queue/pr-$a" "refs/queue/pr-$b" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    if [ "$(generated_only "$pf" "$gen_cfg")" != yes ]; then pairs="$pairs
+$a $b"; fi
+  fi
 done; done
 : > "$flaky_dir/now" 2>/dev/null || true
 : > "$flaky_dir/clashes" 2>/dev/null || true
@@ -1141,10 +1149,40 @@ for pr in $prs; do
   if ! git -C "$wt" merge -q --no-ff --no-edit -m "Merge PR #$pr into $branch: $title" "$head" >/dev/null 2>&1; then
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
     git -C "$wt" reset -q --hard "$good"
-    batch_line "$pr" "dropped" "conflicts with the batch so far"
-    notify_conflict "$pr" "$(git -C "$wt" merge-tree --write-tree --name-only "$good" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')" main
-    dropped="$dropped $pr"
-    continue
+    cfl=$(git -C "$wt" merge-tree --write-tree --name-only "$good" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    gen_note=""; if [ "$(generated_only "$cfl" "$gen_cfg")" = yes ]; then gen_note=generated; fi
+    # Generated files only (scripts/ci/generated-paths.txt): take either
+    # side, rebuild them here, and let the batch's one full run prove it.
+    # Six green pull requests once landed one at a time for a package each
+    # had rebuilt: an hour of landings for twenty minutes of work.
+    if [ "$gen_note" = generated ] && git -C "$wt" merge -q --no-ff --no-edit -X theirs -m "Merge PR #$pr into $branch: $title" "$head" >/dev/null 2>&1; then
+      rb=$(rebuild_command "$gen_cfg")
+      if [ -n "$rb" ]; then
+        if (cd "$wt" && sh -c "$rb") >/dev/null 2>"$flaky_dir/rebuild.err"; then
+          git -C "$wt" add -A >/dev/null 2>&1 || true
+          git -C "$wt" commit -q --amend --no-edit >/dev/null 2>&1 || true
+          echo "  #$pr conflicted only in generated files; took either side and rebuilt them ($rb)."
+        else
+          git -C "$wt" reset -q --hard "$good"
+          batch_line "$pr" "dropped" "conflicted only in generated files, but the rebuild failed: $(tail -n 1 "$flaky_dir/rebuild.err" 2>/dev/null | tr -d '\r')"
+          dropped="$dropped $pr"
+          continue
+        fi
+      else
+        echo "  #$pr conflicted only in generated files; took either side. No rebuild: line in scripts/ci/generated-paths.txt, so the batch's full run must prove them."
+      fi
+    else
+      git -C "$wt" merge --abort >/dev/null 2>&1 || true
+      git -C "$wt" reset -q --hard "$good"
+      if [ "$gen_note" = generated ]; then
+        batch_line "$pr" "dropped" "conflicts with the batch so far; generated only: a rebuild on the batch would resolve this"
+      else
+        batch_line "$pr" "dropped" "conflicts with the batch so far"
+      fi
+      notify_conflict "$pr" "$cfl" main "$gen_note"
+      dropped="$dropped $pr"
+      continue
+    fi
   fi
   changed=$(git -C "$wt" diff --name-only "origin/$base...$head")
   # a member that changes dependencies gets them installed before its check
