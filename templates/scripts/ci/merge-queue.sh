@@ -936,7 +936,19 @@ deploy_if_due() {
   if [ "$d_end" = "$1" ]; then say "Nothing merged, so nothing to deploy."; return 0; fi
   [ -f .claude/deploy.json ] || { say "No .claude/deploy.json; main deploys on its own."; return 0; }
   # The gate: no other green pull request waiting, and the interval passed.
-  if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then say "$gate"; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
+  if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then :; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
+  # Nothing that ships changed since the last deploy (or since this run
+  # began, when none is recorded): start nothing. A template sync that
+  # touched only scripts/ci and workflows once started a web build and two
+  # Android builds. A later landing that ships deploys everything since.
+  git fetch -q origin "$base" 2>/dev/null || true
+  d_from=$(git ls-remote origin refs/deploy/production 2>/dev/null | cut -f1)
+  if [ -z "$d_from" ] || ! git cat-file -e "$d_from^{commit}" 2>/dev/null; then d_from=$1; fi
+  if [ "$(sh "$here/deploy-gate.sh" --ships "$d_from" "$d_end" 2>/dev/null)" = skip ]; then
+    say "deploy: skipped, nothing that ships changed since $(printf '%s' "$d_from" | cut -c1-7)"
+    return 0
+  fi
+  say "$gate"
   if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
     # A project that shows a build id (scripts/ci/build-id.sh) gets it named
     # here, so the line matches what Settings will show.

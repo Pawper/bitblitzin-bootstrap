@@ -7,6 +7,11 @@
 # from its last command; there is no flag now, only this state.
 #
 # Usage: sh scripts/ci/deploy-gate.sh [--last] [BASE]
+#        sh scripts/ci/deploy-gate.sh --ships FROM TO
+#   --ships prints "build" when a path changed between FROM and TO ships
+#   (deploy-lib.sh's ships_path, with appRoot and neverShips from
+#   .claude/deploy.json), "skip" when none does; the queue asks it before
+#   starting Deploy, so a scripts-only landing starts no build.
 #   Prints one line, "deploy: due; ..." (exit 0) or "deploy: held, ..."
 #   (exit 1). --last reads only the last deploy time, no pull request scan
 #   (the brief). A project with no .claude/deploy.json gates nothing.
@@ -18,6 +23,12 @@ here=$(dirname "$0")
 . "$here/batch-lib.sh"
 . "$here/deploy-lib.sh"
 mode=full; base=main
+if [ "$1" = --ships ]; then
+  cfg=$(cat .claude/deploy.json 2>/dev/null || true)
+  app=$(json_string "$cfg" appRoot); app=${app:-.}
+  deploy_skip "$(git diff --name-only "$2" "$3" 2>/dev/null)" "$app" "$(json_words "$cfg" neverShips)" | sed 's/^build$/build/'
+  exit 0
+fi
 for a in "$@"; do case "$a" in --last) mode=last ;; *) base=$a ;; esac; done
 [ -f .claude/deploy.json ] || { echo "deploy: no .claude/deploy.json, nothing gates it"; exit 0; }
 interval=$(json_number "$(cat .claude/deploy.json)" intervalMinutes); [ -n "$interval" ] || interval=60

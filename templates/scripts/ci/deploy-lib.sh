@@ -15,7 +15,10 @@
 # change what the app ships, "no" when it cannot. APP_ROOT is the app's
 # folder ("." for the root). Outside APP_ROOT nothing ships. Inside it, the
 # homes the plugin knows never ship: docs, specs, tests, status, design,
-# logs, supabase, .github, .claude, .scratch, Markdown, and test files.
+# logs, supabase, .github, .claude, .scratch, Markdown, test files, and the
+# plugin's own scripts (scripts/ci/, scripts/design/, scripts/*.sh): a
+# template sync that touched only those once started a web build and two
+# Android builds.
 # EXTRA is the project's own, space separated folders inside the app
 # ("packs scripts"), from "neverShips" in .claude/deploy.json.
 ships_path() {
@@ -26,6 +29,7 @@ ships_path() {
       n = split(extra, x, /[ \t,]+/)
       for (i = 1; i <= n; i++) { e = x[i]; sub(/^\.\//, "", e); sub(/\/$/, "", e); if (e != "" && (p == e || substr(p, 1, length(e) + 1) == e "/")) { print "no"; exit } }
       if (p ~ /^(docs|specs|tests?|status|design|logs|supabase|e2e|\.github|\.claude|\.scratch)\//) { print "no"; exit }
+      if (p ~ /^scripts\/(ci|design|sync|board|drive)\// || p ~ /^scripts\/[^\/]+\.sh$/) { print "no"; exit }
       if (p ~ /\/(tests?|__tests__|e2e)\//) { print "no"; exit }
       if (p ~ /\.(md|mdx)$/ || p ~ /(^|\/)[^\/]*\.(test|spec)\.[A-Za-z]+$/) { print "no"; exit }
       print "yes"
