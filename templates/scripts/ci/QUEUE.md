@@ -115,6 +115,10 @@ The gate prints one line and skips when another open pull request is green (it l
 
 The release checks its own paths (did `android/` change since the last upload?) and skips when nothing it ships moved. List the release workflows in `.claude/deploy.json` under `"releases": ["play-internal.yml", "app-distribution.yml"]`: when the project has no Deploy run to follow (the guard path), `--deploy` starts each of them once instead. Sync names any workflow still on `workflow_run` of CI.
 
+## The batch checkout's packages
+
+Each package in the batch checkout has the packages its lockfile names: linked to the main checkout's `node_modules` when nothing differs, installed there (`QUEUE_INSTALL_COMMAND`, default `npm ci`) when the lockfile or a `file:` dependency's tree differs from what the installed packages came from. A `file:` package (`"@app/core": "file:packages/core"`) is installed by copy, so a repack that lands on main without touching the lockfile counted as no change once, and the batch refused to start with "main is red" on a type error main did not have. The tree of every `file:` path is part of the hash now, and when an install fails the refusal says the checkout's packages are older than main rather than blaming main.
+
 ## Holding a pull request, pausing the schedule
 
 - **Hold one pull request.** A label `queue:hold` (or `hold`), or a line `Queue: hold` in its body, keeps a green pull request out of every drain and batch. `--serial N` refuses it too, unless a person gives a reason with `--because`. Remove the label or the line to release it.

@@ -902,6 +902,10 @@ eq "the drain runs hosted by default" "1" "$(grep -c "runs-on: \${{ vars.QUEUE_R
 eq "and skips itself after a recent drain, or while paused" "2" "$(grep -c 'skipping this one' "$root/templates/.github/workflows/queue-drain.yml")"
 eq "the batch checkout links packages only when the lockfiles match" "1" "$(grep -c 'if \[ "\$em_lock" = "\$em_main" \] && \[ -d "\$main_dir/\$d/node_modules" \]' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a stale link is removed, never the packages behind it" "1" "$(grep -c 'cmd //c rmdir' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "file: dependencies by path" "packages/core
+../shared" "$(file_deps '{"dependencies": {"@app/core": "file:packages/core", "react": "^18"}, "devDependencies": {"@app/shared": "file:../shared"}}')"
+eq "no file: dependency, nothing" "" "$(file_deps '{"dependencies": {"react": "^18"}}')"
+eq "the file: trees are part of the install hash and a stale install is named, not main" "2 1" "$(grep -c 'pkg_hash "\$' "$root/templates/scripts/ci/merge-queue.sh") $(grep -c "installed packages are older than origin" "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a member that changes dependencies is installed for" "1" "$(grep -c 'package.json"\*) ensure_modules' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "the project's install command can be named" "1" "$(grep -c 'QUEUE_INSTALL_COMMAND:-npm ci' "$root/templates/scripts/ci/merge-queue.sh")"
 eq "a lagging pull ref falls back to the branch" "1" "$(grep -c 'fetch -q origin "+refs/heads/$fph_branch:refs/queue/pr-$1"' "$root/templates/scripts/ci/merge-queue.sh")"

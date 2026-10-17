@@ -1007,6 +1007,18 @@ fi
 # runs there, QUEUE_INSTALL_COMMAND or "npm ci". A stale link once made a
 # green main type-check red "before any merge".
 mod_hash() { [ -f "$1" ] && git hash-object "$1" 2>/dev/null || echo none; }
+# pkg_hash DIR PACKAGE_DIR: the lockfile's hash plus the tree hash of every
+# "file:" dependency of DIR's package.json at that checkout's HEAD, so a
+# repack of packages/core that lands on main without touching the lockfile
+# still counts as a change. A batch once refused to start with "main is red"
+# on a type error main did not have: its node_modules held the old copy.
+pkg_hash() {
+  ph_lock=$(mod_hash "$1/$2/package-lock.json")
+  ph_trees=$(for ph_p in $(file_deps "$(cat "$1/$2/package.json" 2>/dev/null)"); do
+    git -C "$1" rev-parse -q --verify "HEAD:$2/$ph_p" 2>/dev/null || echo none
+  done | paste -sd, -)
+  printf '%s%s\n' "$ph_lock" "${ph_trees:+,$ph_trees}"
+}
 is_link() { [ -e "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")" ]; }
 unlink_dir() {
   case "$(uname -s 2>/dev/null)" in
@@ -1022,32 +1034,34 @@ link_dir() {
     *) ln -s "$1" "$2" 2>/dev/null ;;
   esac
 }
-install_here() { # DIR
-  echo "Installing packages in $1 (its lockfile is not the one the linked packages were installed from)."
+install_here() { # DIR HASH
+  echo "Installing packages in $1 (its lockfile or a file: package is not what the installed packages came from)."
   if (cd "$1" && sh -c "${QUEUE_INSTALL_COMMAND:-npm ci --no-audit --no-fund}") >/dev/null 2>"$flaky_dir/install.err"; then
-    mod_hash "$1/package-lock.json" > "$1/node_modules/.queue-lock-hash" 2>/dev/null || true
+    printf '%s\n' "$2" > "$1/node_modules/.queue-lock-hash" 2>/dev/null || true
   else
     echo "  the install failed: $(tail -n 1 "$flaky_dir/install.err" 2>/dev/null)"
+    echo "$1: the install failed" >> "$flaky_dir/modules.stale"
   fi
 }
 ensure_modules() {
+  rm -f "$flaky_dir/modules.stale" 2>/dev/null
   git -C "$wt" ls-files -- package.json '*/package.json' 2>/dev/null | sed 's#/package\.json$##; s#^package\.json$#.#' | while IFS= read -r d; do
     em_nm="$wt/$d/node_modules"
-    em_lock=$(mod_hash "$wt/$d/package-lock.json")
-    em_main=$(mod_hash "$main_dir/$d/package-lock.json")
+    em_lock=$(pkg_hash "$wt" "$d")
+    em_main=$(pkg_hash "$main_dir" "$d")
     if is_link "$em_nm"; then
-      [ "$em_lock" = "$em_main" ] && continue
-      unlink_dir "$em_nm" || { echo "  could not remove the link at $em_nm; the type-check may read stale packages"; continue; }
+      if [ "$em_lock" = "$em_main" ]; then continue; fi
+      unlink_dir "$em_nm" || { echo "  could not remove the link at $em_nm; the type-check may read stale packages"; echo "$em_nm: the link to the main checkout's packages could not be removed" >> "$flaky_dir/modules.stale"; continue; }
     elif [ -d "$em_nm" ]; then
-      [ "$(cat "$em_nm/.queue-lock-hash" 2>/dev/null)" = "$em_lock" ] && continue
+      if [ "$(cat "$em_nm/.queue-lock-hash" 2>/dev/null)" = "$em_lock" ]; then continue; fi
       [ -f "$wt/$d/package-lock.json" ] || continue
-      install_here "$wt/$d"; continue
+      install_here "$wt/$d" "$em_lock"; continue
     fi
     mkdir -p "$wt/$d"
     if [ "$em_lock" = "$em_main" ] && [ -d "$main_dir/$d/node_modules" ]; then
       link_dir "$main_dir/$d/node_modules" "$em_nm" || echo "  could not link $em_nm; the type-check may not find its packages"
     elif [ -f "$wt/$d/package-lock.json" ] && command -v npm >/dev/null 2>&1; then
-      install_here "$wt/$d"
+      install_here "$wt/$d" "$em_lock"
     fi
   done
 }
@@ -1063,7 +1077,12 @@ if [ -n "$typecheck" ] && ! typecheck_ok "$(git -C "$wt" ls-files)" "$wt"; then
   case "$tc_first" in
     *"not the tsc command"*|*"Cannot find module"*|*"ENOENT"*|*"command not found"*)
       echo "The type-check could not run in $wt (packages are not installed there: $tc_first). That is not a red base." ;;
-    *) echo "origin/$base is red here before any merge: $tc_first" ;;
+    *)
+      if [ -s "$flaky_dir/modules.stale" ]; then
+        echo "The checkout's installed packages are older than origin/$base ($(paste -sd';' "$flaky_dir/modules.stale")), so this type error is the checkout's, not main's: $tc_first"
+      else
+        echo "origin/$base is red here before any merge: $tc_first"
+      fi ;;
   esac
   echo "Nothing was dropped for it. Fix the checkout at $wt (install the packages, regenerate the types) and run the batch again."
   exit 1

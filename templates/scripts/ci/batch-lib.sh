@@ -491,3 +491,13 @@ deploy_state() {
     case "$ds_why" in last*) echo "deploy: held, $ds_why" ;; *) echo "deploy: held, $ds_why; $ds_last" ;; esac
   else echo "deploy: due; $ds_last (interval $4)"; fi
 }
+
+# file_deps PACKAGE_JSON
+# The paths of the "file:" dependencies in a package.json (dependencies,
+# devDependencies, optionalDependencies), one a line, as written after
+# "file:". A package installed by copy from such a path goes stale when
+# the path changes on main while the lockfile does not; the queue hashes
+# these trees as well as the lockfile.
+file_deps() {
+  printf '%s\n' "$1" | tr -d '\r' | tr ',{}' '\n\n\n' | sed -n 's/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*"file:\([^"]*\)".*/\1/p'
+}
