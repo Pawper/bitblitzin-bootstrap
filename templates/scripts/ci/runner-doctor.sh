@@ -67,11 +67,9 @@ fi
 # 3. PowerShell execution policy.
 if command -v powershell >/dev/null 2>&1; then
   pol=$(powershell -NoProfile -Command 'Get-ExecutionPolicy -List | ForEach-Object { "$($_.Scope)=$($_.ExecutionPolicy)" }' 2>/dev/null | tr '\r\n' '  ')
-  if [ "$(policy_verdict "$pol")" = warn ] && [ "${services:-0}" -gt 0 ]; then
-    note "execution policy: $pol (a service runner starts each PowerShell step with its own policy, so this matters only for scripts run by hand)"
-  else
-    say "$(policy_verdict "$pol")" "execution policy: $pol$( [ "$(policy_verdict "$pol")" = warn ] && printf ' (a machine policy of Restricted or AllSigned blocks scripts run outside a powershell step)')"
-  fi
+  # A step shell of bare "powershell" runs under this policy too; only a
+  # shell line that names -ExecutionPolicy Bypass escapes it.
+  say "$(policy_verdict "$pol")" "execution policy: $pol$( [ "$(policy_verdict "$pol")" = warn ] && printf ' (a machine policy of Restricted or AllSigned refuses every PowerShell step whose shell line does not name its own: shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '"'"'{0}'"'"'")')"
 fi
 
 # 3b. PowerShell 7 from the Store lives in the user's WindowsApps folder,

@@ -85,6 +85,8 @@ A green pull request that merges cleanly onto main also merges without a second 
 
 ## Release channels follow Deploy
 
+What the releases are and when the queue starts them are two settings. `"releases"` in `.claude/deploy.json` lists them; `"releaseOn"` says when: `"deploy"` (the default) starts each once after a landing that deploys, where no Deploy run starts them; `"ask"` never starts them after a landing, and `sh scripts/ci/merge-queue.sh --release` starts each once, on request. A release workflow that is turned off in Actions is never started: the queue prints `release held: <file> (it is turned off)`, because a project that holds releases until its owner says go turns them off on purpose. With `"ask"`, a release on `workflow_run` of Deploy still follows Deploy; take that trigger off and keep `workflow_dispatch`.
+
 A release build (a Play internal upload, a Firebase App Distribution, a TestFlight build) starts after Deploy, never after CI. A workflow on `workflow_run` of CI builds and uploads on every merge to main: a serial landing round once uploaded 29 Play versions in an afternoon, each a full build on a self-hosted runner. Deploy runs at most once per landing round, started by the queue when the gate says a deploy is due (or by its own schedule), so a release that follows it runs once per round:
 
 ```yaml

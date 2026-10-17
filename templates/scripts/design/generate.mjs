@@ -7,7 +7,7 @@
 // Type roles come out as named styles on each platform: a CSS class
 // .type-<role> with its variables, a TypeScript ROLES entry, a Kotlin
 // DesignType.<Role>, a Swift Design.Type.<role>. A screen says the role.
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -193,15 +193,21 @@ if (out.ts) targets.push([out.ts, withExtra(ts, "ts")]);
 if (out.css) targets.push([out.css, withExtra(css, "css")]);
 if (out.kotlin && out.kotlin.path) targets.push([out.kotlin.path, withExtra(kt(out.kotlin.package || "app.ui.theme"), "kotlin")]);
 if (out.swift) targets.push([typeof out.swift === "string" ? out.swift : out.swift.path, withExtra(swift, "swift")]);
-if (!targets.length) { console.error("design/tokens.json names no outputs; set outputs.ts, outputs.css, outputs.kotlin or outputs.swift."); process.exit(2); }
-
 const check = process.argv.includes("--check");
+if (!targets.length) {
+  // A project with no app yet names no outputs; the check has nothing to compare.
+  if (check) { console.log("design/tokens.json names no outputs yet; nothing to check."); process.exit(0); }
+  console.error("design/tokens.json names no outputs; set outputs.ts, outputs.css, outputs.kotlin or outputs.swift."); process.exit(2);
+}
 let stale = false;
 for (const [p, text] of targets) {
   const file = join(root, p);
   let cur = "";
   try { cur = readFileSync(file, "utf8"); } catch {}
   if (cur.replace(/\r\n/g, "\n") === text) continue;
+  // An output whose folder does not exist yet belongs to a platform not
+  // built yet: the check passes it, and a run of the generator writes it.
+  if (check && !cur && !existsSync(dirname(file))) { console.log(`${p}: its folder does not exist yet; not checked.`); continue; }
   if (check) { console.error(`${p} is out of date. Run: node scripts/design/generate.mjs`); stale = true; }
   else { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text); console.log(`wrote ${p}`); }
 }

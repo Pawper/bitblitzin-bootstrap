@@ -4,9 +4,12 @@
 #   1. Windows picks the wrong bash. With WSL installed, "bash" on PATH is
 #      System32\bash.exe, not Git's. Name Git's bash by path in the job's
 #      default shell, so every step gets the one with the project's tools.
-#   2. PowerShell's execution policy refuses the step. Use "powershell" as
-#      the step shell: the runner starts it with the policy set for that one
-#      process, so the machine's policy does not matter. Not "pwsh": a
+#   2. PowerShell's execution policy refuses the step. The runner starts a
+#      "shell: powershell" step as powershell -command ". '{0}'", so a
+#      machine policy of AllSigned refuses the step's own unsigned script
+#      file. Name the policy for that one process in the shell line:
+#        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+#      Not "pwsh": a
 #      PowerShell 7 installed from the Store lives in the user's WindowsApps
 #      folder, which the runner service cannot see, and the step fails.
 #      Running powershell yourself from a bash step does not get that.
@@ -45,8 +48,8 @@ jobs:
           echo "node: $(command -v node) ($(node --version 2>/dev/null || echo 'not found'))"
           echo "gh:   $(command -v gh || echo 'not found')"
       - name: A PowerShell step, with the policy set for this process
-        # Fix 2: the runner launches Windows PowerShell with its own policy; "pwsh" from the Store lives in a user folder the service cannot see for the step.
-        shell: powershell
+        # Fix 2: the shell line sets the policy for this one process; a bare "shell: powershell" takes the machine's, and AllSigned refuses the step's script. "pwsh" from the Store lives in a user folder the service cannot see.
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           Write-Output "powershell $($PSVersionTable.PSVersion) with policy $(Get-ExecutionPolicy -Scope Process)"
           Write-Output "user $env:USERNAME on $env:COMPUTERNAME"

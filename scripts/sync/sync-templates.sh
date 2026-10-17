@@ -185,6 +185,10 @@ if [ -z "$work" ]; then echo "Everything the plugin owns is current."; exit 0; f
 if [ -f .claude/deploy.json ] && git grep -qE 'merge-queue\.sh.*--deploy|--drain-then-deploy' -- . ':(exclude)scripts/ci/merge-queue.sh' ':(exclude)scripts/ci/QUEUE.md' 2>/dev/null; then
   echo "  deploys:  files here still pass --deploy, which 0.16.0 removed; the queue deploys from state now. For a deploy after every landing (unless another pull request is green), set \"intervalMinutes\": 0 in .claude/deploy.json, and drop the flag."
 fi
+# Releases listed with no releaseOn, on a deploy after every landing.
+if [ -f .claude/deploy.json ] && grep -q '"releases"' .claude/deploy.json && ! grep -q '"releaseOn"' .claude/deploy.json && grep -qE '"intervalMinutes"[[:space:]]*:[[:space:]]*0[^0-9]' .claude/deploy.json; then
+  echo "  releases: .claude/deploy.json lists release workflows with intervalMinutes 0 and no releaseOn, so the queue starts them after every landing that ships. To hold them until asked, add \"releaseOn\": \"ask\" and start them with merge-queue.sh --release."
+fi
 # A rebuild a hosted drain may not be able to run.
 if grep -qs '^[[:space:]]*rebuild:' scripts/ci/generated-paths.txt && command -v gh >/dev/null 2>&1; then
   qro=$(gh api "repos/{owner}/{repo}/actions/variables/QUEUE_RUNS_ON" --jq .value 2>/dev/null) || qro=""
