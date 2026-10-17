@@ -85,7 +85,7 @@ A green pull request that merges cleanly onto main also merges without a second 
 
 ## Release channels follow Deploy
 
-A release build (a Play internal upload, a Firebase App Distribution, a TestFlight build) starts after Deploy, never after CI. A workflow on `workflow_run` of CI builds and uploads on every merge to main: a serial landing round once uploaded 29 Play versions in an afternoon, each a full build on a self-hosted runner. Deploy runs once per drain (`--deploy`, or its own schedule), so a release that follows it runs once per landing round:
+A release build (a Play internal upload, a Firebase App Distribution, a TestFlight build) starts after Deploy, never after CI. A workflow on `workflow_run` of CI builds and uploads on every merge to main: a serial landing round once uploaded 29 Play versions in an afternoon, each a full build on a self-hosted runner. Deploy runs at most once per landing round, started by the queue when the gate says a deploy is due (or by its own schedule), so a release that follows it runs once per round:
 
 ```yaml
 on:
@@ -113,7 +113,11 @@ The release's first step is the gate, the same one the queue uses, so a deploy s
 
 The gate prints one line and skips when another open pull request is green (it lands first; one deploy carries both) or the interval in `.claude/deploy.json` has not passed since the last successful Deploy run. The queue applies the same rule after every landing, in every mode, and a drain once at its end; there is no `--deploy` flag, because a flag an agent must choose not to pass is passed again. `--status` and the session brief print the deploy state as one line. The owner forces a deploy from the Deploy workflow's own dispatch in the Actions tab, never through the queue.
 
-The release checks its own paths (did `android/` change since the last upload?) and skips when nothing it ships moved. List the release workflows in `.claude/deploy.json` under `"releases": ["play-internal.yml", "app-distribution.yml"]`: when the project has no Deploy run to follow (the guard path), `--deploy` starts each of them once instead. Sync names any workflow still on `workflow_run` of CI.
+The Deploy workflow itself has no gate step, on purpose. Its scheduled run has its own throttle (the same interval, counted from when the deployed commit landed), and its manual dispatch is the owner's override, which a gate must never refuse. The gate belongs to what Deploy starts (the release workflows) and to the queue.
+
+`"intervalMinutes": 0` in `.claude/deploy.json` deploys after every landing unless another pull request is green, which is what `--deploy` did before 0.16.0. The sync offers it to a project whose files still pass `--deploy`.
+
+The release checks its own paths (did `android/` change since the last upload?) and skips when nothing it ships moved. List the release workflows in `.claude/deploy.json` under `"releases": ["play-internal.yml", "app-distribution.yml"]`: when the project has no Deploy run to follow (the guard path), the queue starts each of them once instead, after a landing, when the gate says a deploy is due. Sync names any workflow still on `workflow_run` of CI.
 
 ## The batch checkout's packages
 
@@ -121,7 +125,9 @@ Each package in the batch checkout has the packages its lockfile names: linked t
 
 ## Checked-in build output
 
-A project that checks a built package into the repository (a shared Kotlin core's JS package, a generated client) has every pull request that touches its source commit a rebuild too, and two such pull requests conflict on the generated files even when their sources do not. Six green ones once landed one at a time for it, each with a merge from main, a rebuild and a full CI run: an hour of landings for twenty minutes of work. List those files in `scripts/ci/generated-paths.txt`, one glob per line, with the command that rebuilds them on a `rebuild:` line. When a pull request conflicts with the batch only in those files, the queue takes either side, runs the rebuild on the batch branch, and lets the batch's one full run prove it; nothing is dropped. Without a `rebuild:` line it takes either side and says the full run must prove the files. A pull request dropped for a conflict whose files are all generated says so in its line and its comment ("generated only: a rebuild on the batch would resolve this"), so a serial round is known to be avoidable.
+A project that checks a built package into the repository (a shared Kotlin core's JS package, a generated client) has every pull request that touches its source commit a rebuild too, and two such pull requests conflict on the generated files even when their sources do not. Six green ones once landed one at a time for it, each with a merge from main, a rebuild and a full CI run: an hour of landings for twenty minutes of work. List those files in `scripts/ci/generated-paths.txt`, one glob per line, with the command that rebuilds them on a `rebuild:` line. When a pull request conflicts with the batch only in those files, the queue takes either side, runs the rebuild on the batch branch, and lets the batch's one full run prove it; nothing is dropped. Without a `rebuild:` line it takes either side and says the full run must prove the files.
+
+The rebuild runs in the batch checkout with the queue's own environment: whatever the shell that runs the queue has, and nothing more. A Gradle rebuild that needs a JDK names one with a default, so the line works on a machine that has `JAVA_HOME` and on one that does not: `rebuild: JAVA_HOME="${JAVA_HOME:-/opt/jdk-21}" ./gradlew :core:jsPackage`. A drain on a hosted Linux runner cannot run a Windows-only rebuild; set the repository variable `QUEUE_RUNS_ON` to the runner that can, and the drain workflow and the sync both warn while it is hosted. A pull request dropped for a conflict whose files are all generated says so in its line and its comment ("generated only: a rebuild on the batch would resolve this"), so a serial round is known to be avoidable.
 
 ## Holding a pull request, pausing the schedule
 

@@ -9,6 +9,11 @@
 #   sh "$CLAUDE_PLUGIN_ROOT/scripts/sync/sync-templates.sh"          report only
 #   sh "$CLAUDE_PLUGIN_ROOT/scripts/sync/sync-templates.sh" --apply  update, on a new branch
 #   ... --apply --force   also replace plugin-owned files the project edited
+#   ... --apply --no-commit   write and stage, but leave the commit to the
+#                             agent, so it carries the session's attribution
+# A path in .claude/project-owned.txt (one per line) is the project's from
+# then on: listed, never compared or written. A generator that outgrew the
+# template (scripts/design/generate.mjs with blocks of its own) goes there.
 #
 # What it does with each kind of file:
 #   - Plugin-owned scripts and workflows (templates/OWNED.txt): reported when
@@ -29,11 +34,12 @@ here=$(dirname "$0")
 . "$here/sync-lib.sh"
 plugin=$(cd "$here/../.." && pwd)
 tpl="$plugin/templates"
-apply=no; force=no; only=""
+apply=no; force=no; only=""; no_commit=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply) apply=yes ;;
     --force) force=yes ;;
+    --no-commit) no_commit=yes ;;
     --only) shift; only=$(printf '%s' "$1" | tr ',' ' ') ;;
     --only=*) only=$(printf '%s' "${1#--only=}" | tr ',' ' ') ;;
   esac
@@ -64,7 +70,13 @@ in_scope() {
   case " $adopted " in *" $is_f "*) return 0 ;; *) return 1 ;; esac
 }
 changed=""; missing=""; current=0; unadopted=""
+project_owned=$(sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d' .claude/project-owned.txt 2>/dev/null || true)
 for p in $(owned_paths "$owned"); do
+  case "
+$project_owned
+" in *"
+$p
+"*) echo "  project:  $p (listed in .claude/project-owned.txt; never compared or written)"; continue ;; esac
   if ! in_scope "$p"; then
     [ -f "$p" ] || unadopted="$unadopted $(feature_of "$features" "$p")"
     continue
@@ -88,6 +100,7 @@ for p in $changed; do
   n=$(git log --oneline -- "$p" 2>/dev/null | wc -l | tr -d ' ')
   if [ "${n:-0}" -gt 1 ]; then
     echo "  differs:  $p (edited here in $((n - 1)) later commit(s); kept unless --force; check that diff and carry the edit into the template or an issue)"
+    case "$p" in scripts/design/generate.mjs) echo "            a generator that grew blocks of its own is the project's now: add the line scripts/design/generate.mjs to .claude/project-owned.txt, or move the extra output into scripts/design/generate.local.mjs (its extra() hook)" ;; esac
     edited="$edited $p"
   else echo "  differs:  $p"; fi
 done
@@ -166,6 +179,17 @@ fi
 
 work=$(printf '%s%s%s' "$changed" "$missing" "$defaults" | tr -d ' ')
 if [ -z "$work" ]; then echo "Everything the plugin owns is current."; exit 0; fi
+# A project that still passes --deploy (gone in 0.16.0) wanted a deploy
+# after every landing: intervalMinutes 0 is that, unless another pull
+# request is green.
+if [ -f .claude/deploy.json ] && git grep -qE 'merge-queue\.sh.*--deploy|--drain-then-deploy' -- . ':(exclude)scripts/ci/merge-queue.sh' ':(exclude)scripts/ci/QUEUE.md' 2>/dev/null; then
+  echo "  deploys:  files here still pass --deploy, which 0.16.0 removed; the queue deploys from state now. For a deploy after every landing (unless another pull request is green), set \"intervalMinutes\": 0 in .claude/deploy.json, and drop the flag."
+fi
+# A rebuild a hosted drain may not be able to run.
+if grep -qs '^[[:space:]]*rebuild:' scripts/ci/generated-paths.txt && command -v gh >/dev/null 2>&1; then
+  qro=$(gh api "repos/{owner}/{repo}/actions/variables/QUEUE_RUNS_ON" --jq .value 2>/dev/null) || qro=""
+  case "$qro" in ''|ubuntu*|windows-latest|macos*) echo "  queue:    scripts/ci/generated-paths.txt names a rebuild, and the scheduled drain runs hosted (${qro:-ubuntu-latest}); if the rebuild needs your machine, set the repository variable QUEUE_RUNS_ON to its runner's label." ;; esac
+fi
 if [ "$apply" = no ]; then echo "Nothing was changed. To write these on a branch: $self --apply${only:+ --only $(printf '%s' "$only" | tr ' ' ',')}"; exit 0; fi
 
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "The working tree has uncommitted changes; commit or move them aside first." >&2; exit 1; }
@@ -246,8 +270,12 @@ if [ -n "$lf_add" ]; then
   echo "  pinned:   $lf_add to LF in .gitattributes, since this repository checks out CRLF"
 fi
 git add -- $written
-git commit -q -m "Sync the plugin's scripts and workflows to bitblitzin-bootstrap $version" -m "Plugin-owned files were brought up to date with the installed plugin; config files that did not exist were added with their defaults. Files the project owns, and plugin-owned files the project had edited, were not touched."
-echo "Committed on branch $branch. Review the diff, then push it and open a pull request. Secrets and variables named above must exist before the added workflows run."
+if [ "$no_commit" = yes ]; then
+  echo "Staged on branch $branch, not committed (--no-commit). Commit it yourself, with your session's attribution; then push and open a pull request. Secrets and variables named above must exist before the added workflows run."
+else
+  git commit -q -m "Sync the plugin's scripts and workflows to bitblitzin-bootstrap $version" -m "Plugin-owned files were brought up to date with the installed plugin; config files that did not exist were added with their defaults. Files the project owns, and plugin-owned files the project had edited, were not touched."
+  echo "Committed on branch $branch. Review the diff, then push it and open a pull request. Secrets and variables named above must exist before the added workflows run. An agent that wants its own attribution on the commit passes --no-commit."
+fi
 # New state labels arrive with labels.sh; state.sh fails until they exist.
 case " $written " in
   *" scripts/labels.sh "*)

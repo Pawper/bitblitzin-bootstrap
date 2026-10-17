@@ -6,6 +6,10 @@
 # of work. When a pull request conflicts with the batch only in these
 # files, the queue takes either side, runs the rebuild, and lets the
 # batch's one full run prove it, instead of dropping the pull request.
+# The rebuild runs with the queue's environment and nothing more; give a
+# tool's home a default so it runs on any machine that runs the queue. A
+# drain on a hosted Linux runner cannot run a Windows-only rebuild: point
+# QUEUE_RUNS_ON at a runner that can.
 # Empty by default. Example:
 # packages/core/*
-# rebuild: ./gradlew :core:jsPackage
+# rebuild: JAVA_HOME="${JAVA_HOME:-/opt/jdk-21}" ./gradlew :core:jsPackage

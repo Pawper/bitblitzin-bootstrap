@@ -28,6 +28,10 @@
 # lets the plan see whether a runner is online; without it the plan assumes
 # one is, and a failed build still falls back. The last deployed commit is
 # recorded as refs/deploy/production, which the brief and the audit read.
+#
+# A project that shows its version (in Settings, say) adds
+# scripts/ci/build-id.sh, printing one id for a commit; both build paths
+# pass it to the app as NEXT_PUBLIC_BUILD_ID, so no project forks this file.
 name: Deploy
 
 on:
@@ -120,6 +124,7 @@ jobs:
         shell: bash
         run: |
           npx --yes vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
+          if [ -f scripts/ci/build-id.sh ]; then NEXT_PUBLIC_BUILD_ID=$(sh scripts/ci/build-id.sh HEAD); export NEXT_PUBLIC_BUILD_ID; echo "Build $NEXT_PUBLIC_BUILD_ID"; fi
           npx --yes vercel@latest build --prod --token="$VERCEL_TOKEN"
           npx --yes vercel@latest deploy --prebuilt --prod --token="$VERCEL_TOKEN"
       - name: Record the deployed commit
@@ -153,7 +158,10 @@ jobs:
           echo "::warning title=Deploy fell back to a Vercel build::The runner build failed, so this deploy is built on Vercel and bills its build minutes. Look at the build-on-runner job; the nightly audit repeats this until a runner build succeeds."
       - name: Deploy, built on Vercel
         shell: bash
-        run: npx --yes vercel@latest deploy --prod --yes --token="$VERCEL_TOKEN"
+        run: |
+          set -- --prod --yes --token="$VERCEL_TOKEN"
+          if [ -f scripts/ci/build-id.sh ]; then bid=$(sh scripts/ci/build-id.sh HEAD); echo "Build $bid"; set -- "$@" --build-env NEXT_PUBLIC_BUILD_ID="$bid" --env NEXT_PUBLIC_BUILD_ID="$bid"; fi
+          npx --yes vercel@latest deploy "$@"
       - name: Record the deployed commit
         shell: bash
         env:
