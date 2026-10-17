@@ -58,7 +58,11 @@ jobs:
     outputs:
       classes: ${{ steps.classes.outputs.classes }}
     env:
-      BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+      # On a pull request github.sha is the merge of the branch into main as
+      # it is now, and its first parent is that main. The recorded base.sha
+      # is main as it was at the pull request's last event, so a line that
+      # landed on main in between once counted as the pull request's own.
+      BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
     steps:
       - uses: actions/checkout@v4
         with:

@@ -18,9 +18,16 @@
 #                   migration|conflict|must-land-alone|"reason". The reason
 #                   goes into the merge commit's title for the audit.
 #
-#   --drain [--deploy]  merge everything green, batching; with --deploy
-#                   (or --drain-then-deploy), start the Deploy workflow
-#                   afterwards when the project deploys on a schedule.
+#   --drain         merge everything green, batching, round after round.
+#
+# After a landing, in every mode, the queue deploys from state and never
+# from a flag: when no other open pull request is green and the interval
+# in .claude/deploy.json has passed (scripts/ci/deploy-gate.sh), it starts
+# the Deploy workflow, or the listed releases where no Deploy run would;
+# otherwise it prints "deploy held: ..." and why. A drain deploys once, at
+# its end. There is no --deploy: nine serial landings once each carried
+# one an agent copied from its last command. The owner forces a deploy
+# from the Actions tab, never through the queue.
 #
 # Usage: sh scripts/ci/merge-queue.sh [--batch | --serial] [--base BRANCH] PR...
 #        sh scripts/ci/merge-queue.sh PR [BASE]            (one PR, serial, as before)
@@ -60,7 +67,6 @@ pause_for=""
 base="main"
 prs=""
 because=""
-then_deploy=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --batch) mode=batch ;;
@@ -69,8 +75,8 @@ while [ $# -gt 0 ]; do
     --status) mode=status ;;
     --serial) mode=serial ;;
     --drain) mode=drain ;;
-    --drain-then-deploy) mode=drain; then_deploy=1 ;;
-    --deploy) then_deploy=1 ;;
+    --drain-then-deploy) mode=drain; echo "There is no --deploy any more: the queue deploys from state after a landing (scripts/ci/deploy-gate.sh)." ;;
+    --deploy) echo "There is no --deploy any more: the queue deploys from state after a landing (scripts/ci/deploy-gate.sh)." ;;
     --because) shift; because=$1 ;;
     --because=*) because=${1#--because=} ;;
     --rounds) shift; rounds=$1 ;;
@@ -95,6 +101,7 @@ case "$mode" in
     slpid=${sl%%	*}
     salive=no; [ -n "$slpid" ] && kill -0 "$slpid" 2>/dev/null && salive=yes
     queue_status "$(queue_lock_reason "$sl" "$(date +%s)" "$salive")" "$(tail -n 1 ".scratch/queue/log" 2>/dev/null | cut -c1-160)"
+    [ -f .claude/deploy.json ] && sh "$here/deploy-gate.sh" "$base" || true
     exit 0 ;;
   pause)
     pu=$(pause_until "$(date +%s)" "$pause_for")
@@ -137,6 +144,10 @@ tab=$(printf '\t')
 # annotations of a job that is stuck, one for our runners. Bounded waits.
 wait_minutes=${QUEUE_WAIT_MINUTES:-60}
 flaky_dir=.scratch/queue
+# Checked-in build output and the command that rebuilds it (see
+# scripts/ci/generated-paths.txt): conflicts in these files alone are
+# resolved on the batch, not dropped.
+gen_cfg=$(cat scripts/ci/generated-paths.txt 2>/dev/null || true)
 mkdir -p "$flaky_dir" 2>/dev/null || true
 
 # Staying inside GitHub's API limits. There are two. The hourly quota
@@ -870,7 +881,7 @@ if [ "$mode" = drain ]; then
     fi
   done
   say "drain rounds done"
-  if [ -n "$then_deploy" ]; then deploy_after_merge "$d_begin"; fi
+  deploy_if_due "$d_begin"
   # Re-read each one before calling it a failure: a pull request red
   # earlier in the drain may be green, or only cancelled, by now.
   still=""
@@ -906,23 +917,26 @@ notify_conflict() {
   nc_sha=$(pr_field "$1" 2)
   nc_seen="$flaky_dir/noticed"
   grep -qx "$1 $nc_sha" "$nc_seen" 2>/dev/null && return 0
-  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$(conflict_notice "$2" "$3")" >/dev/null 2>&1 || return 0
+  gh api -X POST "repos/{owner}/{repo}/issues/$1/comments" -f body="$(conflict_notice "$2" "$3" "${4:-}")" >/dev/null 2>&1 || return 0
   nc_cur=$(gh api "repos/{owner}/{repo}/issues/$1/labels" --jq '.[].name' 2>/dev/null || true)
   state_labels_json "$nc_cur" "state:blocked" | gh api -X PUT "repos/{owner}/{repo}/issues/$1/labels" --input - >/dev/null 2>&1 || true
   echo "$1 $nc_sha" >> "$nc_seen"
   say "  #$1: commented with the conflicting files and labeled it state:blocked."
 }
 
-# deploy_after_merge BEGIN_SHA: --deploy, the same in every mode. When main
+# deploy_if_due BEGIN_SHA: after a landing, the same in every mode. When main
 # moved since BEGIN_SHA and the project deploys on a schedule, start the
 # Deploy workflow now rather than at the next hour; the guard path deploys
 # from Git by itself. Release channels (store uploads, test distributions)
 # follow Deploy; where no Deploy run starts them, the ones listed under
 # "releases" in .claude/deploy.json are started here, once. A --serial
 # run once ended "queue done" with no deploy started: only the drain did this.
-deploy_after_merge() {
+deploy_if_due() {
   d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   if [ "$d_end" = "$1" ]; then say "Nothing merged, so nothing to deploy."; return 0; fi
+  [ -f .claude/deploy.json ] || { say "No .claude/deploy.json; main deploys on its own."; return 0; }
+  # The gate: no other green pull request waiting, and the interval passed.
+  if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then say "$gate"; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
   if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
     gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged." || say "Could not start the Deploy workflow; run it from the Actions tab."
     return 0
@@ -958,10 +972,11 @@ if [ "$mode" = serial ]; then
   [ -n "$because" ] || { [ -n "$QUEUE_IN_DRAIN" ] && because=drain; }
   s_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
   for pr in $prs; do serial_one "$pr"; done
-  if [ -n "$then_deploy" ] && [ -z "$QUEUE_IN_DRAIN" ]; then deploy_after_merge "$s_begin"; fi
+  if [ -z "$QUEUE_IN_DRAIN" ]; then deploy_if_due "$s_begin"; fi
   exit 0
 fi
 
+b_begin=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
 # Batch mode. The batch is built in its own worktree, never in the main
 # checkout, so a person working there is not switched onto the batch
 # branch under their feet. QUEUE_WORKTREE names the folder; the default is
@@ -996,6 +1011,18 @@ fi
 # runs there, QUEUE_INSTALL_COMMAND or "npm ci". A stale link once made a
 # green main type-check red "before any merge".
 mod_hash() { [ -f "$1" ] && git hash-object "$1" 2>/dev/null || echo none; }
+# pkg_hash DIR PACKAGE_DIR: the lockfile's hash plus the tree hash of every
+# "file:" dependency of DIR's package.json at that checkout's HEAD, so a
+# repack of packages/core that lands on main without touching the lockfile
+# still counts as a change. A batch once refused to start with "main is red"
+# on a type error main did not have: its node_modules held the old copy.
+pkg_hash() {
+  ph_lock=$(mod_hash "$1/$2/package-lock.json")
+  ph_trees=$(for ph_p in $(file_deps "$(cat "$1/$2/package.json" 2>/dev/null)"); do
+    git -C "$1" rev-parse -q --verify "HEAD:$2/$ph_p" 2>/dev/null || echo none
+  done | paste -sd, -)
+  printf '%s%s\n' "$ph_lock" "${ph_trees:+,$ph_trees}"
+}
 is_link() { [ -e "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)" != "$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")" ]; }
 unlink_dir() {
   case "$(uname -s 2>/dev/null)" in
@@ -1011,32 +1038,34 @@ link_dir() {
     *) ln -s "$1" "$2" 2>/dev/null ;;
   esac
 }
-install_here() { # DIR
-  echo "Installing packages in $1 (its lockfile is not the one the linked packages were installed from)."
+install_here() { # DIR HASH
+  echo "Installing packages in $1 (its lockfile or a file: package is not what the installed packages came from)."
   if (cd "$1" && sh -c "${QUEUE_INSTALL_COMMAND:-npm ci --no-audit --no-fund}") >/dev/null 2>"$flaky_dir/install.err"; then
-    mod_hash "$1/package-lock.json" > "$1/node_modules/.queue-lock-hash" 2>/dev/null || true
+    printf '%s\n' "$2" > "$1/node_modules/.queue-lock-hash" 2>/dev/null || true
   else
     echo "  the install failed: $(tail -n 1 "$flaky_dir/install.err" 2>/dev/null)"
+    echo "$1: the install failed" >> "$flaky_dir/modules.stale"
   fi
 }
 ensure_modules() {
+  rm -f "$flaky_dir/modules.stale" 2>/dev/null
   git -C "$wt" ls-files -- package.json '*/package.json' 2>/dev/null | sed 's#/package\.json$##; s#^package\.json$#.#' | while IFS= read -r d; do
     em_nm="$wt/$d/node_modules"
-    em_lock=$(mod_hash "$wt/$d/package-lock.json")
-    em_main=$(mod_hash "$main_dir/$d/package-lock.json")
+    em_lock=$(pkg_hash "$wt" "$d")
+    em_main=$(pkg_hash "$main_dir" "$d")
     if is_link "$em_nm"; then
-      [ "$em_lock" = "$em_main" ] && continue
-      unlink_dir "$em_nm" || { echo "  could not remove the link at $em_nm; the type-check may read stale packages"; continue; }
+      if [ "$em_lock" = "$em_main" ]; then continue; fi
+      unlink_dir "$em_nm" || { echo "  could not remove the link at $em_nm; the type-check may read stale packages"; echo "$em_nm: the link to the main checkout's packages could not be removed" >> "$flaky_dir/modules.stale"; continue; }
     elif [ -d "$em_nm" ]; then
-      [ "$(cat "$em_nm/.queue-lock-hash" 2>/dev/null)" = "$em_lock" ] && continue
+      if [ "$(cat "$em_nm/.queue-lock-hash" 2>/dev/null)" = "$em_lock" ]; then continue; fi
       [ -f "$wt/$d/package-lock.json" ] || continue
-      install_here "$wt/$d"; continue
+      install_here "$wt/$d" "$em_lock"; continue
     fi
     mkdir -p "$wt/$d"
     if [ "$em_lock" = "$em_main" ] && [ -d "$main_dir/$d/node_modules" ]; then
       link_dir "$main_dir/$d/node_modules" "$em_nm" || echo "  could not link $em_nm; the type-check may not find its packages"
     elif [ -f "$wt/$d/package-lock.json" ] && command -v npm >/dev/null 2>&1; then
-      install_here "$wt/$d"
+      install_here "$wt/$d" "$em_lock"
     fi
   done
 }
@@ -1052,7 +1081,12 @@ if [ -n "$typecheck" ] && ! typecheck_ok "$(git -C "$wt" ls-files)" "$wt"; then
   case "$tc_first" in
     *"not the tsc command"*|*"Cannot find module"*|*"ENOENT"*|*"command not found"*)
       echo "The type-check could not run in $wt (packages are not installed there: $tc_first). That is not a red base." ;;
-    *) echo "origin/$base is red here before any merge: $tc_first" ;;
+    *)
+      if [ -s "$flaky_dir/modules.stale" ]; then
+        echo "The checkout's installed packages are older than origin/$base ($(paste -sd';' "$flaky_dir/modules.stale")), so this type error is the checkout's, not main's: $tc_first"
+      else
+        echo "origin/$base is red here before any merge: $tc_first"
+      fi ;;
   esac
   echo "Nothing was dropped for it. Fix the checkout at $wt (install the packages, regenerate the types) and run the batch again."
   exit 1
@@ -1075,8 +1109,12 @@ printf 'checking %s\n' "$(printf '%s ' $prs | sed 's/ $//')" > "$flaky_dir/now" 
 pairs=""
 for a in $prs; do for b in $prs; do
   [ "$a" -lt "$b" ] || continue
-  git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1 || pairs="$pairs
-$a $b"
+  if ! git -C "$wt" merge-tree --write-tree "refs/queue/pr-$a" "refs/queue/pr-$b" >/dev/null 2>&1; then
+    # a pair that clashes only in generated files is resolved on the batch
+    pf=$(git -C "$wt" merge-tree --write-tree --name-only "refs/queue/pr-$a" "refs/queue/pr-$b" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    if [ "$(generated_only "$pf" "$gen_cfg")" != yes ]; then pairs="$pairs
+$a $b"; fi
+  fi
 done; done
 : > "$flaky_dir/now" 2>/dev/null || true
 : > "$flaky_dir/clashes" 2>/dev/null || true
@@ -1111,10 +1149,40 @@ for pr in $prs; do
   if ! git -C "$wt" merge -q --no-ff --no-edit -m "Merge PR #$pr into $branch: $title" "$head" >/dev/null 2>&1; then
     git -C "$wt" merge --abort >/dev/null 2>&1 || true
     git -C "$wt" reset -q --hard "$good"
-    batch_line "$pr" "dropped" "conflicts with the batch so far"
-    notify_conflict "$pr" "$(git -C "$wt" merge-tree --write-tree --name-only "$good" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')" main
-    dropped="$dropped $pr"
-    continue
+    cfl=$(git -C "$wt" merge-tree --write-tree --name-only "$good" "$head" 2>/dev/null | sed -n '2,$p' | sed '/^$/,$d')
+    gen_note=""; if [ "$(generated_only "$cfl" "$gen_cfg")" = yes ]; then gen_note=generated; fi
+    # Generated files only (scripts/ci/generated-paths.txt): take either
+    # side, rebuild them here, and let the batch's one full run prove it.
+    # Six green pull requests once landed one at a time for a package each
+    # had rebuilt: an hour of landings for twenty minutes of work.
+    if [ "$gen_note" = generated ] && git -C "$wt" merge -q --no-ff --no-edit -X theirs -m "Merge PR #$pr into $branch: $title" "$head" >/dev/null 2>&1; then
+      rb=$(rebuild_command "$gen_cfg")
+      if [ -n "$rb" ]; then
+        if (cd "$wt" && sh -c "$rb") >/dev/null 2>"$flaky_dir/rebuild.err"; then
+          git -C "$wt" add -A >/dev/null 2>&1 || true
+          git -C "$wt" commit -q --amend --no-edit >/dev/null 2>&1 || true
+          echo "  #$pr conflicted only in generated files; took either side and rebuilt them ($rb)."
+        else
+          git -C "$wt" reset -q --hard "$good"
+          batch_line "$pr" "dropped" "conflicted only in generated files, but the rebuild failed: $(tail -n 1 "$flaky_dir/rebuild.err" 2>/dev/null | tr -d '\r')"
+          dropped="$dropped $pr"
+          continue
+        fi
+      else
+        echo "  #$pr conflicted only in generated files; took either side. No rebuild: line in scripts/ci/generated-paths.txt, so the batch's full run must prove them."
+      fi
+    else
+      git -C "$wt" merge --abort >/dev/null 2>&1 || true
+      git -C "$wt" reset -q --hard "$good"
+      if [ "$gen_note" = generated ]; then
+        batch_line "$pr" "dropped" "conflicts with the batch so far; generated only: a rebuild on the batch would resolve this"
+      else
+        batch_line "$pr" "dropped" "conflicts with the batch so far"
+      fi
+      notify_conflict "$pr" "$cfl" main "$gen_note"
+      dropped="$dropped $pr"
+      continue
+    fi
   fi
   changed=$(git -C "$wt" diff --name-only "origin/$base...$head")
   # a member that changes dependencies gets them installed before its check
@@ -1250,3 +1318,4 @@ if [ -n "$dropped" ]; then
   because="dropped from batch"
   for pr in $dropped; do serial_one "$pr"; done
 fi
+if [ -z "$QUEUE_IN_DRAIN" ]; then deploy_if_due "$b_begin"; fi

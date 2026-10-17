@@ -36,6 +36,14 @@ else
 fi
 
 base=${1:-origin/main}; head=${2:-}
+# A pull request is judged on its own lines only. When HEAD is the merge of
+# the branch into main as it is now (two parents), the base is that merge's
+# first parent, whatever was passed: a recorded base.sha is main as it was
+# when the pull request last moved, and a line that landed on main since
+# then was once flagged as the pull request's.
+if [ -n "$head" ] && git rev-parse -q --verify "$head^2" >/dev/null 2>&1; then
+  base=$(git rev-parse "$head^1")
+fi
 if [ -n "$head" ]; then range="$base $head"; diff_args="$base $head"; else range="$base"; diff_args="$base"; fi
 
 # 2. literals in UI files

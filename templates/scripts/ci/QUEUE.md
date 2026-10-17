@@ -100,7 +100,28 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
 ```
 
+The release's first step is the gate, the same one the queue uses, so a deploy started by hand cannot stack builds in front of CI:
+
+```yaml
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        run: sh scripts/ci/deploy-gate.sh || echo "skip=yes" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.skip != 'yes'
+        run: # the build and the upload
+```
+
+The gate prints one line and skips when another open pull request is green (it lands first; one deploy carries both) or the interval in `.claude/deploy.json` has not passed since the last successful Deploy run. The queue applies the same rule after every landing, in every mode, and a drain once at its end; there is no `--deploy` flag, because a flag an agent must choose not to pass is passed again. `--status` and the session brief print the deploy state as one line. The owner forces a deploy from the Deploy workflow's own dispatch in the Actions tab, never through the queue.
+
 The release checks its own paths (did `android/` change since the last upload?) and skips when nothing it ships moved. List the release workflows in `.claude/deploy.json` under `"releases": ["play-internal.yml", "app-distribution.yml"]`: when the project has no Deploy run to follow (the guard path), `--deploy` starts each of them once instead. Sync names any workflow still on `workflow_run` of CI.
+
+## The batch checkout's packages
+
+Each package in the batch checkout has the packages its lockfile names: linked to the main checkout's `node_modules` when nothing differs, installed there (`QUEUE_INSTALL_COMMAND`, default `npm ci`) when the lockfile or a `file:` dependency's tree differs from what the installed packages came from. A `file:` package (`"@app/core": "file:packages/core"`) is installed by copy, so a repack that lands on main without touching the lockfile counted as no change once, and the batch refused to start with "main is red" on a type error main did not have. The tree of every `file:` path is part of the hash now, and when an install fails the refusal says the checkout's packages are older than main rather than blaming main.
+
+## Checked-in build output
+
+A project that checks a built package into the repository (a shared Kotlin core's JS package, a generated client) has every pull request that touches its source commit a rebuild too, and two such pull requests conflict on the generated files even when their sources do not. Six green ones once landed one at a time for it, each with a merge from main, a rebuild and a full CI run: an hour of landings for twenty minutes of work. List those files in `scripts/ci/generated-paths.txt`, one glob per line, with the command that rebuilds them on a `rebuild:` line. When a pull request conflicts with the batch only in those files, the queue takes either side, runs the rebuild on the batch branch, and lets the batch's one full run prove it; nothing is dropped. Without a `rebuild:` line it takes either side and says the full run must prove the files. A pull request dropped for a conflict whose files are all generated says so in its line and its comment ("generated only: a rebuild on the batch would resolve this"), so a serial round is known to be avoidable.
 
 ## Holding a pull request, pausing the schedule
 

@@ -30,6 +30,7 @@ scripts/protect-main.sh
 # Config with defaults: added when missing to a project using the feature
 # they sit under, never replaced.
 default .claude/generated-pages.txt
+default .github/pull_request_template.md
 default .claude/numbering.txt
 default scripts/ci/classes.txt
 default scripts/ci/setup-paths.txt
@@ -41,6 +42,8 @@ scripts/ci/batch-lib.sh
 scripts/ci/run-lib.sh
 scripts/ci/run-test-file.mjs
 scripts/ci/QUEUE.md
+scripts/ci/deploy-gate.sh
+default scripts/ci/generated-paths.txt
 scripts/pr-checks.sh
 scripts/worktrees-lib.sh
 scripts/worktrees.sh
