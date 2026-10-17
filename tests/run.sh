@@ -1407,10 +1407,40 @@ eq "roles a web file references, in any spelling" "title
 body" "$(role_refs 'className="type-title"; const b = ROLES.body;' "$(token_role_keys "$dtok")")"
 eq "roles a Kotlin file references" "title
 label" "$(role_refs 'style = DesignType.Title; DesignType.Label' "$(token_role_keys "$dtok")")"
+eq "an import, a string id and a bare word are not references" "" "$(role_refs "$(printf 'import androidx.compose.ui.semantics.heading\nLabel(stringResource(R.string.station_week_heading))\nModifier.semantics { heading() }\n// the heading of the page')" "$(printf 'heading\nsentence')")"
+eq "a member after a name and a class are" "heading
+sentence" "$(role_refs "$(printf 'style = AtText.sentence\n<h1 className="type-heading" />')" "$(printf 'heading\nsentence')")"
+eq "a kebab class and a quoted index are" "rowClaim
+body" "$(role_refs "$(printf '<p class="type-row-claim">\nconst b = ROLES["body"]')" "$(printf 'rowClaim\nbody')")"
 eq "a word that only contains a key is not a reference" "" "$(role_refs 'const subtitle = 1; nobody' "$(token_role_keys "$dtok")")"
 eq "a mismatch names who uses what" "today: a.tsx uses body, T.kt does not
 today: T.kt uses label, a.tsx does not" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'title\nlabel')")"
 eq "matching sides, nothing" "" "$(role_mismatch today a.tsx "$(printf 'title\nbody')" T.kt "$(printf 'body\ntitle')")"
+eq "a folder side is touched by any file under it" "yes" "$(side_touched 'web/src/app/stations/[key]/' 'web/src/app/stations/[key]/page.tsx')"
+eq "a file side only by itself" "no" "$(side_touched 'web/a.tsx' 'web/a.tsx.bak')"
+eq "a folder side is not touched by a sibling" "no" "$(side_touched 'web/screen/' 'web/screens/x.tsx')"
+eq "a folder side stands for its files, not its build output" "web/screen/page.tsx
+web/screen/parts/Heat.tsx" "$(side_files 'web/screen/' "$(printf 'web/screen/page.tsx\nweb/screen/parts/Heat.tsx\nweb/screen/build/x.js\nweb/other.tsx')")"
+eq "a file side stands for itself" "phone/Screen.kt" "$(side_files 'phone/Screen.kt' 'anything')"
+pp=$(mktemp -d)
+(
+  cd "$pp" && git init -q -b main && git config user.email t@t && git config user.name t && git config core.autocrlf false
+  mkdir -p design scripts/ci scripts/design phone web/screen other
+  cp "$root/templates/scripts/ci/design-check.sh" scripts/ci/ && cp "$root/templates/scripts/design/design-lib.sh" scripts/design/
+  printf '{"type": {"roles": [{"key": "heading"}, {"key": "sentence"}]}}\n' > design/tokens.json
+  printf 'screen phone/Screen.kt web/screen/\n' > scripts/ci/parity.txt
+  printf 'Text(style = DesignType.Heading)\n' > phone/Screen.kt
+  printf '<h1 className="type-heading" />\n' > web/screen/page.tsx
+  git add -A && git commit -qm base && git tag start
+  git checkout -qb pr && printf 'x\n' > other/admin.ts && git add -A && git commit -qm pr
+  git checkout -q main && printf 'Text(style = DesignType.Heading)\nText(style = DesignType.Sentence)\n' > phone/Screen.kt && printf '<h1 className="type-heading" /><p className="type-sentence" />\n' > web/screen/page.tsx && git add -A && git commit -qm "main moves both sides"
+  git checkout -q pr
+  sh scripts/ci/design-check.sh start pr 2>&1 | grep -c 'does not'
+  printf 'Text(style = DesignType.Heading)\nText(style = DesignType.Sentence)\n' > phone/Screen.kt && git add -A && git commit -qm "pr: phone only"
+  sh scripts/ci/design-check.sh start pr 2>&1 | grep 'does not'
+) > "$pp.out" 2>&1
+eq "an untouched folder pair after main moved reports nothing" "0" "$(sed -n 1p "$pp.out")"
+eq "a real mismatch against a folder side is still found" "  Screen.kt: Screen.kt uses sentence, web/screen/ does not" "$(sed -n 2p "$pp.out")"
 eq "a screen of blocks is one comparison against the union" "android/Settings.kt	src/app/settings/a.tsx src/app/settings/b.tsx
 src/app/page.tsx	android/Today.kt" "$(parity_groups "$(parity_pairs "$(printf 'sa src/app/settings/a.tsx android/Settings.kt
 sb src/app/settings/b.tsx android/Settings.kt

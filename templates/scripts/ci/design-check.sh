@@ -29,7 +29,9 @@ done_check() { kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; }
 fail=0
 # 1. generated files current
 step "generated files current (node scripts/design/generate.mjs --check)"
-if command -v node >/dev/null 2>&1; then
+if [ ! -f scripts/design/generate.mjs ]; then
+  echo "No scripts/design/generate.mjs here, so the generated design files were not checked." >&2
+elif command -v node >/dev/null 2>&1; then
   node scripts/design/generate.mjs --check || fail=1
 else
   echo "node is not on the PATH, so the generated design files were not checked." >&2
@@ -43,6 +45,10 @@ base=${1:-origin/main}; head=${2:-}
 # then was once flagged as the pull request's.
 if [ -n "$head" ] && git rev-parse -q --verify "$head^2" >/dev/null 2>&1; then
   base=$(git rev-parse "$head^1")
+elif [ -n "$head" ]; then
+  # Not a merge commit (a branch tip, a push): diff from where the branch
+  # left main, so main's own later changes are never the pull request's.
+  mb=$(git merge-base "$base" "$head" 2>/dev/null) && base=$mb
 fi
 if [ -n "$head" ]; then range="$base $head"; diff_args="$base $head"; else range="$base"; diff_args="$base"; fi
 
@@ -86,22 +92,30 @@ if [ -f scripts/ci/parity.txt ]; then
   keys=$(token_role_keys "$(cat design/tokens.json)")
   # shellcheck disable=SC2086
   changed=$(git diff --name-only $diff_args -- . ':(exclude)**/node_modules/**' ':(exclude)**/build/**' 2>/dev/null)
-  file_roles() { role_refs "$(git show "${head:-HEAD}:$1" 2>/dev/null || cat "$1" 2>/dev/null)" "$keys"; }
+  # A side is a file, or a folder (ending in "/"): every file under it.
+  rev=${head:-HEAD}
+  listing=$(git ls-tree -r --name-only "$rev" 2>/dev/null)
+  file_roles() {
+    for fr_f in $(side_files "$1" "$listing"); do
+      role_refs "$(git show "$rev:$fr_f" 2>/dev/null || cat "$fr_f" 2>/dev/null)" "$keys"
+    done | sort -u
+  }
   # A file several pairs name (a native screen holding many web blocks) is
   # compared with the union of its partners' roles, once.
   mism=$(parity_groups "$(parity_pairs "$(cat scripts/ci/parity.txt)")" | while IFS="$(printf '\t')" read -r f partners; do
     touched=no
-    for x in $f $partners; do case "
-$changed
-" in *"
-$x
-"*) touched=yes ;; esac; done
+    for x in $f $partners; do
+      if [ "$(side_touched "$x" "$changed")" = yes ]; then touched=yes; fi
+    done
     [ "$touched" = yes ] || continue
     rf=$(file_roles "$f")
     rp=$(for x in $partners; do file_roles "$x"; done | sort -u)
     np=$(printf '%s\n' $partners | wc -l | tr -d ' ')
-    if [ "$np" -gt 1 ]; then side="the $np files paired with it"; else side=$(basename "$partners"); fi
-    role_mismatch "$(basename "$f")" "$(basename "$f")" "$rf" "$side" "$rp"
+    if [ "$np" -gt 1 ]; then side="the $np files paired with it"; else
+      case "$partners" in */) side="$partners" ;; *) side=$(basename "$partners") ;; esac
+    fi
+    case "$f" in */) fname=$f ;; *) fname=$(basename "$f") ;; esac
+    role_mismatch "$fname" "$fname" "$rf" "$side" "$rp"
   done)
   if [ -n "$mism" ]; then
     echo "A screen pair references different type roles on its two platforms:" >&2

@@ -75,27 +75,37 @@ design_escape() {
 }
 
 # role_refs TEXT ROLE_KEYS
-# The type roles TEXT references, one key per line, found as the key in
-# any spelling a platform uses (rowClaim, type-row-claim, RowClaim,
-# row_claim) as a whole word.
+# The type roles TEXT references, one key per line. A role counts only in
+# a reference form: a class "type-<key>" (type-rowClaim, type-row-claim),
+# a member after a name (DesignType.RowClaim, AtText.rowClaim, ROLES.body),
+# or a quoted index (ROLES["body"]). Import and package lines never count.
+# A bare word did once: Compose's semantics.heading import and a string
+# named station_week_heading made a phone screen "use" the heading role,
+# and its web pair was reported as missing it.
 role_refs() {
-  # One awk pass over the text with every key at once. The first version
-  # spawned tr, sed and grep per key: 27 keys took 20 seconds a file on
-  # Windows, and a screen with 14 paired blocks took five minutes.
   rr_keys=$(printf '%s\n' "$2" | sed '/^[[:space:]]*$/d' | tr -d '\r' | paste -sd'|' -)
   [ -n "$rr_keys" ] || return 0
-  printf '%s\n' "$1" | tr 'A-Z' 'a-z' | awk -v keys="$rr_keys" '
+  printf '%s\n' "$1" | tr -d '\r' | awk -v keys="$rr_keys" '
     BEGIN {
       n = split(keys, k, "|")
       for (i = 1; i <= n; i++) {
-        j = tolower(k[i]); gsub(/[_-]/, "", j); joined[i] = j
-        # rowClaim reads as "row claim"; type-row-claim as "type row claim"
-        s = k[i]; gsub(/[A-Z]/, " &", s); gsub(/[_-]/, " ", s); gsub(/  +/, " ", s); sub(/^ /, "", s); spaced[i] = tolower(s)
+        lo[i] = tolower(k[i])
+        # rowClaim also reads as row-claim in a class name
+        s = k[i]; gsub(/[A-Z]/, "-&", s); sub(/^-/, "", s); kb[i] = tolower(s)
       }
     }
+    /^[[:space:]]*(import|package)[[:space:]]/ { next }
     {
-      line = " " $0 " "; gsub(/[^a-z0-9]/, " ", line)
-      for (i = 1; i <= n; i++) if (!(i in hit) && (index(line, " " joined[i] " ") || index(line, " " spaced[i] " "))) hit[i] = 1
+      line = tolower($0)
+      for (i = 1; i <= n; i++) {
+        if (i in hit) continue
+        if (match(line, "type-(" lo[i] "|" kb[i] ")([^a-z0-9_-]|$)")) { hit[i] = 1; continue }
+        if (match(line, "[a-z0-9_)\\]]\\." lo[i] "([^a-z0-9_]|$)")) {
+          # a member, unless the name before it is "semantics" (Compose)
+          pre = substr(line, 1, RSTART); if (pre !~ /semantics$/) { hit[i] = 1; continue }
+        }
+        if (index(line, "[\"" lo[i] "\"]") || index(line, "[\047" lo[i] "\047]")) hit[i] = 1
+      }
     }
     END { for (i = 1; i <= n; i++) if (i in hit) print k[i] }'
 }
@@ -184,4 +194,30 @@ parity_groups() {
         if (n[a[i]] < 2 && n[b[i]] < 2) print a[i] "\t" b[i]
       }
     }'
+}
+
+# side_touched SIDE CHANGED
+# "yes" when CHANGED (one path per line) changes the pair side SIDE: the
+# file itself, or, for a side that ends in "/" (a folder, as parity.txt
+# allows), any file under it. A folder side once never counted as touched,
+# because only whole lines were matched.
+side_touched() {
+  printf '%s\n' "$2" | tr -d '\r' | awk -v s="$1" '
+    $0 == "" { next }
+    s ~ /\/$/ { if (index($0, s) == 1) { hit = 1; exit } next }
+    $0 == s { hit = 1; exit }
+    END { print (hit ? "yes" : "no") }'
+}
+
+# side_files SIDE LISTING
+# The files a pair side stands for: SIDE itself, or, for a folder side
+# (ending in "/"), every path of LISTING (one per line, as git ls-tree -r
+# --name-only prints it) under the folder, leaving out node_modules and
+# build output. A folder read as one file once gave its file names, and
+# every role on the other platform was reported missing.
+side_files() {
+  case "$1" in
+    */) printf '%s\n' "$2" | tr -d '\r' | awk -v s="$1" 'index($0, s) == 1 && $0 !~ /(^|\/)(node_modules|build)\// { print }' ;;
+    *) printf '%s\n' "$1" ;;
+  esac
 }
