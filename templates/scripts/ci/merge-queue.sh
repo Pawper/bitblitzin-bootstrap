@@ -32,6 +32,7 @@
 # Usage: sh scripts/ci/merge-queue.sh [--batch | --serial] [--base BRANCH] PR...
 #        sh scripts/ci/merge-queue.sh PR [BASE]            (one PR, serial, as before)
 #        sh scripts/ci/merge-queue.sh --status             (running or idle, one line)
+#        sh scripts/ci/merge-queue.sh --release            (start each listed release once, now)
 #
 # The last line of .scratch/queue/log for every run is "queue done (exit N);
 # lock released", written by the exit trap after the deploy and the lock,
@@ -73,6 +74,7 @@ while [ $# -gt 0 ]; do
     --pause) shift; mode=pause; pause_for=$1 ;;
     --resume) mode=resume ;;
     --status) mode=status ;;
+    --release) mode=release ;;
     --serial) mode=serial ;;
     --drain) mode=drain ;;
     --drain-then-deploy) mode=drain; echo "There is no --deploy any more: the queue deploys from state after a landing (scripts/ci/deploy-gate.sh)." ;;
@@ -96,6 +98,10 @@ set_repo_var() {
 }
 iso_utc() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
 case "$mode" in
+  release)
+    [ -n "$(release_workflows "$(cat .claude/deploy.json 2>/dev/null)")" ] || { echo "No release workflows listed under \"releases\" in .claude/deploy.json."; exit 2; }
+    start_releases ask
+    exit 0 ;;
   status)
     sl=$(cat ".scratch/queue/lock" 2>/dev/null || true)
     slpid=${sl%%	*}
@@ -714,6 +720,61 @@ tidy_worktree() {
 # running, when nothing new turned green, after --rounds rounds (default
 # six), or after QUEUE_DRAIN_MINUTES (default ninety).
 take_lock
+# start_releases WHY: the release workflows listed in .claude/deploy.json,
+# each started once, unless "releaseOn" is "ask" and WHY is a landing, or
+# the workflow is turned off. A turned-off release is a decision, not an
+# error: one project holds releases until its owner says go, and the queue
+# once tried to start both after an unrelated merge.
+start_releases() {
+  sr_cfg=$(cat .claude/deploy.json 2>/dev/null)
+  sr_on=$(release_on "$sr_cfg")
+  for sr_f in $(release_workflows "$sr_cfg"); do
+    sr_state=$(gh api "repos/{owner}/{repo}/actions/workflows/$sr_f" --jq .state 2>/dev/null) || sr_state=""
+    sr_why=$(release_hold "$sr_state" "$sr_on" "$1")
+    if [ -n "$sr_why" ]; then say "release held: $sr_f $sr_why"; continue; fi
+    gh api -X POST "repos/{owner}/{repo}/actions/workflows/$sr_f/dispatches" -f ref="$base" >/dev/null 2>&1 \
+      && say "Started the release workflow $sr_f." || say "Could not start $sr_f; run it from the Actions tab."
+  done
+}
+
+# Defined before the drain, which calls it at its end: defined after it,
+# the drain ended "deploy_if_due: command not found" (exit 127) every time.
+# deploy_if_due BEGIN_SHA: after a landing, the same in every mode. When main
+# moved since BEGIN_SHA and the project deploys on a schedule, start the
+# Deploy workflow now rather than at the next hour; the guard path deploys
+# from Git by itself. Release channels (store uploads, test distributions)
+# follow Deploy; where no Deploy run starts them, the ones listed under
+# "releases" in .claude/deploy.json are started here, once. A --serial
+# run once ended "queue done" with no deploy started: only the drain did this.
+deploy_if_due() {
+  d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
+  if [ "$d_end" = "$1" ]; then say "Nothing merged, so nothing to deploy."; return 0; fi
+  [ -f .claude/deploy.json ] || { say "No .claude/deploy.json; main deploys on its own."; return 0; }
+  # The gate: no other green pull request waiting, and the interval passed.
+  if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then :; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
+  # Nothing that ships changed since the last deploy (or since this run
+  # began, when none is recorded): start nothing. A template sync that
+  # touched only scripts/ci and workflows once started a web build and two
+  # Android builds. A later landing that ships deploys everything since.
+  git fetch -q origin "$base" 2>/dev/null || true
+  d_from=$(git ls-remote origin refs/deploy/production 2>/dev/null | cut -f1)
+  if [ -z "$d_from" ] || ! git cat-file -e "$d_from^{commit}" 2>/dev/null; then d_from=$1; fi
+  if [ "$(sh "$here/deploy-gate.sh" --ships "$d_from" "$d_end" 2>/dev/null)" = skip ]; then
+    say "deploy: skipped, nothing that ships changed since $(printf '%s' "$d_from" | cut -c1-7)"
+    return 0
+  fi
+  say "$gate"
+  if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
+    # A project that shows a build id (scripts/ci/build-id.sh) gets it named
+    # here, so the line matches what Settings will show.
+    d_build=""; if [ -f scripts/ci/build-id.sh ]; then d_build=$(sh scripts/ci/build-id.sh "$d_end" 2>/dev/null | head -n 1); fi
+    gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged${d_build:+, build $d_build}." || say "Could not start the Deploy workflow; run it from the Actions tab."
+    return 0
+  fi
+  say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."
+  start_releases landing
+}
+
 if [ "$mode" = drain ]; then
   rounds=${rounds:-6}
   drain_minutes=${QUEUE_DRAIN_MINUTES:-90}
@@ -924,44 +985,6 @@ notify_conflict() {
   say "  #$1: commented with the conflicting files and labeled it state:blocked."
 }
 
-# deploy_if_due BEGIN_SHA: after a landing, the same in every mode. When main
-# moved since BEGIN_SHA and the project deploys on a schedule, start the
-# Deploy workflow now rather than at the next hour; the guard path deploys
-# from Git by itself. Release channels (store uploads, test distributions)
-# follow Deploy; where no Deploy run starts them, the ones listed under
-# "releases" in .claude/deploy.json are started here, once. A --serial
-# run once ended "queue done" with no deploy started: only the drain did this.
-deploy_if_due() {
-  d_end=$(git ls-remote origin "refs/heads/$base" 2>/dev/null | cut -f1)
-  if [ "$d_end" = "$1" ]; then say "Nothing merged, so nothing to deploy."; return 0; fi
-  [ -f .claude/deploy.json ] || { say "No .claude/deploy.json; main deploys on its own."; return 0; }
-  # The gate: no other green pull request waiting, and the interval passed.
-  if gate=$(sh "$here/deploy-gate.sh" "$base" 2>/dev/null); then :; else say "${gate:-deploy: held} (the Deploy workflow's own dispatch in Actions forces one)"; return 0; fi
-  # Nothing that ships changed since the last deploy (or since this run
-  # began, when none is recorded): start nothing. A template sync that
-  # touched only scripts/ci and workflows once started a web build and two
-  # Android builds. A later landing that ships deploys everything since.
-  git fetch -q origin "$base" 2>/dev/null || true
-  d_from=$(git ls-remote origin refs/deploy/production 2>/dev/null | cut -f1)
-  if [ -z "$d_from" ] || ! git cat-file -e "$d_from^{commit}" 2>/dev/null; then d_from=$1; fi
-  if [ "$(sh "$here/deploy-gate.sh" --ships "$d_from" "$d_end" 2>/dev/null)" = skip ]; then
-    say "deploy: skipped, nothing that ships changed since $(printf '%s' "$d_from" | cut -c1-7)"
-    return 0
-  fi
-  say "$gate"
-  if [ -f .github/workflows/deploy.yml ] && grep -q '"runner"\|"vercel"' .claude/deploy.json 2>/dev/null; then
-    # A project that shows a build id (scripts/ci/build-id.sh) gets it named
-    # here, so the line matches what Settings will show.
-    d_build=""; if [ -f scripts/ci/build-id.sh ]; then d_build=$(sh scripts/ci/build-id.sh "$d_end" 2>/dev/null | head -n 1); fi
-    gh api -X POST "repos/{owner}/{repo}/actions/workflows/deploy.yml/dispatches" -f ref="$base" >/dev/null 2>&1 && say "Started the Deploy workflow for what was merged${d_build:+, build $d_build}." || say "Could not start the Deploy workflow; run it from the Actions tab."
-    return 0
-  fi
-  say "This project deploys from Git (the guard path) or has no Deploy workflow; main deploys on its own."
-  for rw_f in $(release_workflows "$(cat .claude/deploy.json 2>/dev/null)"); do
-    gh api -X POST "repos/{owner}/{repo}/actions/workflows/$rw_f/dispatches" -f ref="$base" >/dev/null 2>&1 \
-      && say "Started the release workflow $rw_f for what was merged." || say "Could not start $rw_f; run it from the Actions tab."
-  done
-}
 
 # ready_others EXCLUDE: the open pull requests aimed at the base, not
 # drafts, green and not conflicting with main, other than EXCLUDE.

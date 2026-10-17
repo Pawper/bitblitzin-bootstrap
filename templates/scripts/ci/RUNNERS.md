@@ -18,6 +18,8 @@ The service runs as NETWORK SERVICE, which sees only the machine PATH, not your 
 
 ## The shell every step runs in
 
+A PowerShell step names its own execution policy: `shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"`. A bare `shell: powershell` runs the step's script under the machine's policy, and a machine set to AllSigned refuses it ("is not digitally signed"). The doctor warns about an AllSigned or Restricted machine policy.
+
 On a Windows runner the service account's `bash` and `sh` resolve to the WSL stub, and every step fails before it starts. `ci.yml` and `queue-drain.yml` carry a `RUN_SHELL` placeholder in their workflow-level `defaults.run.shell`; on Windows runners set it to Git's bash by its short path, `'C:\PROGRA~1\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}'`, and on hosted runners to `bash`. A PowerShell step says `shell: powershell`, never `pwsh`: PowerShell 7 from the Store lives in a user folder the service cannot see. The gh-only workflows (audit, board sync, state label, runner watch) stay on hosted runners and keep `shell: sh`.
 
 ## Run two

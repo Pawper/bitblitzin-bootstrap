@@ -182,8 +182,10 @@ jobs:
     # and the hourly runner-watch workflow says so. An organization can put
     # the runners in a group with a hosted fallback instead.
     # On a self-hosted Windows runner, RUN_SHELL at the top of this file is
-    # Git's bash by path; a PowerShell step says "shell: powershell" (not
-    # pwsh, which a Store install hides from the service); never put an
+    # Git's bash by path; a PowerShell step says
+    # shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+    # (a bare "powershell" takes the machine policy, and AllSigned refuses
+    # the step; not pwsh, which a Store install hides); never put an
     # expression in "shell:". Run scripts/ci/runner-doctor.sh first.
     if: github.event_name == 'push'
     runs-on: RUNS_ON

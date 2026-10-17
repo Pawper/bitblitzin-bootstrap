@@ -939,6 +939,26 @@ eq "the plugin's own scripts never ship" "no no no yes" "$(. "$root/templates/sc
 eq "a scripts-only landing deploys nothing" "skip" "$(. "$root/templates/scripts/ci/deploy-lib.sh"; deploy_skip "$(printf 'scripts/ci/merge-queue.sh\n.github/workflows/ci.yml\n.claude/deploy.json\nSETUP.md')" .)"
 eq "one shipping path among them deploys" "build" "$(. "$root/templates/scripts/ci/deploy-lib.sh"; deploy_skip "$(printf 'scripts/ci/merge-queue.sh\nsrc/app/page.tsx')" .)"
 eq "the queue asks what ships before starting Deploy" "1 1" "$(grep -c 'deploy-gate.sh" --ships' "$root/templates/scripts/ci/merge-queue.sh") $(grep -c 'deploy: skipped, nothing that ships changed' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "the drain's deploy function is defined before the drain calls it" "yes" "$(awk '/^deploy_if_due\(\) \{/ && !d { d = NR } /^  deploy_if_due "\$d_begin"/ && !c { c = NR } END { print (d && c && d < c) ? "yes" : "no" }' "$root/templates/scripts/ci/merge-queue.sh")"
+eq "releaseOn ask" "ask" "$(release_on '{"releases": ["a.yml"], "releaseOn": "ask"}')"
+eq "releaseOn defaults to deploy" "deploy" "$(release_on '{"releases": ["a.yml"]}')"
+eq "a turned-off release is held" "(it is turned off; a turned-off release is held on purpose)" "$(release_hold disabled_manually deploy landing)"
+eq "an ask release is held after a landing" "(releaseOn is ask; merge-queue.sh --release starts it)" "$(release_hold active ask landing)"
+eq "an ask release starts when asked" "" "$(release_hold active ask ask)"
+eq "a deploy release starts after a landing" "" "$(release_hold active deploy landing)"
+eq "a turned-off release is held even when asked" "(it is turned off; a turned-off release is held on purpose)" "$(release_hold disabled_manually ask ask)"
+eq "the PowerShell step names its own policy, in the step and in the header" "2 0" "$(grep -c "shell: powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{0}'\"" "$root/templates/.github/workflows/runner-check.yml") $(grep -c '^        shell: powershell$' "$root/templates/.github/workflows/runner-check.yml")"
+gp=$(mktemp -d)
+(
+  cd "$gp" && mkdir -p design scripts/design && cp "$root/templates/scripts/design/generate.mjs" scripts/design/
+  printf '{"outputs": {"ts": "web/src/design/tokens.ts", "css": null, "kotlin": null, "swift": null}, "type": {"families": [], "roles": []}}\n' > design/tokens.json
+  printf '{"icons": []}\n' > design/icons.json
+  node scripts/design/generate.mjs --check >/dev/null 2>&1; echo "missing folder $?"
+  printf '{"outputs": {"ts": null, "css": null, "kotlin": null, "swift": null}, "type": {"families": [], "roles": []}}\n' > design/tokens.json
+  node scripts/design/generate.mjs --check >/dev/null 2>&1; echo "no outputs $?"
+) > "$gp.out" 2>&1
+eq "the design check passes an output whose folder does not exist yet" "missing folder 0" "$(sed -n 1p "$gp.out")"
+eq "and a project with no outputs yet" "no outputs 0" "$(sed -n 2p "$gp.out")"
 eq "a green pull request holds the deploy" "2 green PRs waiting" "$(deploy_gate 2 1000 5000 60)"
 eq "one green pull request, singular" "1 green PR waiting" "$(deploy_gate 1 '' 5000 60)"
 eq "inside the interval holds it" "last deploy 35 minutes ago, interval 60" "$(deploy_gate 0 2900 5000 60)"

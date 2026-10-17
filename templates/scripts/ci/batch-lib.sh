@@ -530,3 +530,20 @@ generated_only() {
   set +f
   if [ "$go_any" = yes ] && [ "$go_all" = yes ]; then echo yes; else echo no; fi
 }
+
+# release_on DEPLOY_JSON: "ask" or "deploy" (the default), from "releaseOn"
+# in .claude/deploy.json. "ask": the queue never starts the listed releases
+# after a landing; merge-queue.sh --release starts each once, on request.
+release_on() {
+  ro=$(printf '%s' "$1" | tr -d '\r\n' | sed -n 's/.*"releaseOn"[ \t]*:[ \t]*"\([a-z]*\)".*/\1/p')
+  case "$ro" in ask) echo ask ;; *) echo deploy ;; esac
+}
+
+# release_hold STATE ON WHY
+# Why a release workflow is not started, or nothing to start it. STATE is
+# its state from the API (active, disabled_manually, ...); ON is release_on;
+# WHY is "landing" (after a merge) or "ask" (merge-queue.sh --release).
+release_hold() {
+  case "$1" in disabled*) echo "(it is turned off; a turned-off release is held on purpose)"; return 0 ;; esac
+  if [ "$2" = ask ] && [ "$3" = landing ]; then echo "(releaseOn is ask; merge-queue.sh --release starts it)"; fi
+}
