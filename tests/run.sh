@@ -1086,6 +1086,7 @@ eq "prose in a quoted body is not a merge" "" "$(batch_merge_reason "printf 'Run
 eq "the real invocation beside the prose still counts" "3" "$(batch_merge_reason "echo 'merge-queue.sh is fine' && sh scripts/ci/merge-queue.sh 1 2 3")"
 eq "a quoted gh pr merge is prose" "" "$(direct_merge_reason "printf 'never run gh pr merge 12' >> notes.md")"
 eq "the pull request template shows both parity forms" "2" "$(grep -c '^Parity: ' "$root/templates/.github/pull_request_template.md")"
+eq "CI diffs a pull request from current main, the merge ref's first parent" "1 1" "$(grep -c "BASE: \${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}" "$root/templates/.github/workflows/ci.yml") $(grep -c 'base=$(git rev-parse "$head^1")' "$root/templates/scripts/ci/design-check.sh")"
 eq "a lock whose process is gone is free" "" "$(queue_lock_reason "4242	1000	--drain" 1720 no)"
 eq "a lock older than three hours is free" "" "$(queue_lock_reason "4242	1000	--batch" 20000 yes)"
 eq "no lock is free" "" "$(queue_lock_reason '' 1720 yes)"

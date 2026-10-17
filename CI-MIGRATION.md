@@ -70,3 +70,13 @@ A project that adopts `design/tokens.json` adds one step to the `checks` job, af
 ```
 
 It needs Node on the runner (the generator) and `pull-requests: read` (the live body, for a `Design:` line). A project without `design/tokens.json` is untouched: the step skips itself.
+
+## 0.16.0: the base is current main
+
+In `ci.yml`, `BASE` for a pull request was `github.event.pull_request.base.sha`: main as it was at the pull request's last event. `github.sha` is the merge of the branch into main as it is now, so every check's diff also held whatever landed on main in between, and a pull request was flagged for a literal it never touched. Change the line to:
+
+```yaml
+      BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+```
+
+`HEAD^1` is the merge commit's first parent, current main, and every check already takes `BASE` as a git revision. `design-check.sh` also guards itself: given a merge commit as HEAD, it uses that commit's first parent whatever base it was passed.
