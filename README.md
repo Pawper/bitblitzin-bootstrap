@@ -1,3 +1,12 @@
+> **This plugin is now SipNShip.** Bitblitzin Bootstrap was renamed and moved on 2026-10-17. Install it from [Pawper/sipnship-plugin](https://github.com/Pawper/sipnship-plugin):
+>
+> ```
+> claude plugin marketplace add Pawper/sipnship-plugin
+> claude plugin install sipnship@sipnship
+> ```
+>
+> Then remove this one: `claude plugin uninstall bitblitzin-bootstrap@bitblitzin-bootstrap`. This repository is archived and read-only; its history continues in the new one.
+
 <p align="center">
   <a href="https://bitblitzin.com/bootstrap"><picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/bootstrap-lockup-on-dark.png">
